@@ -17,7 +17,6 @@ MEMORY {
 }
 
 SECTIONS {
-    /* === SDRAM: main application code === */
     . = 0x10400000;
 
     .text : {
@@ -28,25 +27,6 @@ SECTIONS {
         . = ALIGN(4);
     } > SDRAM
 
-    /* === BRAM: hot code (VMA in BRAM, stored in ELF after SDRAM .text) === */
-    .app_fasttext : {
-        . = ALIGN(4);
-        __app_fasttext_start = .;
-        *(.app_fasttext*)
-        *(.app_fastrodata*)
-        . = ALIGN(4);
-        __app_fasttext_end = .;
-    } > APP_BRAM AT> SDRAM
-
-    .app_fastdata : {
-        . = ALIGN(4);
-        __app_fastdata_start = .;
-        *(.app_fastdata*)
-        . = ALIGN(4);
-        __app_fastdata_end = .;
-    } > APP_BRAM AT> SDRAM
-
-    /* === SDRAM: data sections === */
     .data : {
         *(.data*)
         *(.sdata*)
@@ -69,4 +49,15 @@ SECTIONS {
         . = ALIGN(4);
         __bss_end = .;
     } > SDRAM
+
+    /* BRAM hot code: VMA in BRAM, LMA stored in ELF after SDRAM sections.
+     * Empty for apps that don't use OF_FASTTEXT — no PT_LOAD generated. */
+    .app_fasttext : {
+        *(.app_fasttext*)
+        *(.app_fastrodata*)
+    } > APP_BRAM AT> SDRAM
+
+    .app_fastdata : {
+        *(.app_fastdata*)
+    } > APP_BRAM AT> SDRAM
 }
