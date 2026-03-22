@@ -3,12 +3,13 @@
         "magic": "APF_VER_1",
         "data_slots": [
             {
-                "id": 0,
-                "name": "OS Data",
-                "required": false,
-                "parameters": "0x01",
-                "address": "0x30280000",
-                "size_maximum": "0x10000"
+                "id": 9,
+                "name": "Game",
+                "required": true,
+                "parameters": 275,
+                "extensions": [
+                    "json"
+                ]
             },
             {
                 "id": 1,
@@ -58,13 +59,6 @@
                 "extensions": ["mid", "dat", "png", "bin", "grp", "pak", "wad", "rom", "nes"],
                 "deferload": true
             },
-            {
-                "id": 9,
-                "name": "Game",
-                "required": true,
-                "parameters": 275,
-                "extensions": ["json"]
-            },
             { "id": 10, "name": "Save 0", "required": false, "parameters": "0x85", "nonvolatile": true, "address": "0x30000000", "size_maximum": "0x40000", "extensions": ["sav"] },
             { "id": 11, "name": "Save 1", "required": false, "parameters": "0x85", "nonvolatile": true, "address": "0x30040000", "size_maximum": "0x40000", "extensions": ["sav"] },
             { "id": 12, "name": "Save 2", "required": false, "parameters": "0x85", "nonvolatile": true, "address": "0x30080000", "size_maximum": "0x40000", "extensions": ["sav"] },
@@ -74,7 +68,8 @@
             { "id": 16, "name": "Save 6", "required": false, "parameters": "0x85", "nonvolatile": true, "address": "0x30180000", "size_maximum": "0x40000", "extensions": ["sav"] },
             { "id": 17, "name": "Save 7", "required": false, "parameters": "0x85", "nonvolatile": true, "address": "0x301C0000", "size_maximum": "0x40000", "extensions": ["sav"] },
             { "id": 18, "name": "Save 8", "required": false, "parameters": "0x85", "nonvolatile": true, "address": "0x30200000", "size_maximum": "0x40000", "extensions": ["sav"] },
-            { "id": 19, "name": "Save 9", "required": false, "parameters": "0x85", "nonvolatile": true, "address": "0x30240000", "size_maximum": "0x40000", "extensions": ["sav"] }
+            { "id": 19, "name": "Save 9", "required": false, "parameters": "0x85", "nonvolatile": true, "address": "0x30240000", "size_maximum": "0x40000", "extensions": ["sav"] },
+            { "id": 7, "name": "OS Data", "required": false, "parameters": 0, "address": "0x30280000", "size_maximum": "0x10000" }
         ]
     }
 }

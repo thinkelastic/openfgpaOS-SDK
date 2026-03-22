@@ -101,11 +101,34 @@ Include `"of.h"` for the full API:
 ### Save system
 
 ```c
-of_save_write(0, data, 0, sizeof(data));
-of_save_flush_size(0, sizeof(data));
+/* Preferred: standard C file I/O */
+FILE *f = fopen("save_0", "wb");
+fwrite(data, sizeof(data), 1, f);
+fclose(f);  /* auto-flushes to SD */
 
-of_save_read(0, data, 0, sizeof(data));
+FILE *f = fopen("save_0", "rb");
+fread(data, sizeof(data), 1, f);
+fclose(f);
 ```
+
+### Data Slot Layout
+
+The APF framework uses data slots to map files to bridge memory. The `data.json` defines the slot layout:
+
+| Slot ID | Name | Purpose |
+|---------|------|---------|
+| 9 | Game | Instance selector (must be first in data.json) |
+| 1 | OS Binary | `os.bin` — loaded by bootloader via DMA |
+| 2 | Application | App ELF — loaded by OS kernel |
+| 3-6 | Data 1-4 | App data files (WAD, GRP, etc.) |
+| 7 | OS Data | CRAM1 region for OS file table (FTAB) |
+| 10-19 | Save 0-9 | Nonvolatile CRAM1 save slots (256KB each) |
+
+**Important:**
+- Slot 9 (Game selector) **must be the first entry** in `data.json` — the APF framework requires it
+- Slot 0 is reserved by APF — do not use
+- Slot 7 (OS Data) maps the CRAM1 region where Chip32 writes the filename-to-slot table (FTAB). This enables `fopen("filename.ext")` to resolve filenames to data slots automatically
+- Save slot addresses use bridge addressing (`0x30000000` = CRAM1), with 256KB stride
 
 ### PC build
 
