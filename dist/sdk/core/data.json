@@ -3,13 +3,12 @@
         "magic": "APF_VER_1",
         "data_slots": [
             {
-                "id": 9,
-                "name": "Game",
-                "required": true,
-                "parameters": 275,
-                "extensions": [
-                    "json"
-                ]
+                "id": 0,
+                "name": "OS Data",
+                "required": false,
+                "parameters": "0x01",
+                "address": "0x30280000",
+                "size_maximum": "0x10000"
             },
             {
                 "id": 1,
@@ -58,6 +57,13 @@
                 "parameters": 0,
                 "extensions": ["mid", "dat", "png", "bin", "grp", "pak", "wad", "rom", "nes"],
                 "deferload": true
+            },
+            {
+                "id": 9,
+                "name": "Game",
+                "required": true,
+                "parameters": 275,
+                "extensions": ["json"]
             },
             { "id": 10, "name": "Save 0", "required": false, "parameters": "0x85", "nonvolatile": true, "address": "0x30000000", "size_maximum": "0x40000", "extensions": ["sav"] },
             { "id": 11, "name": "Save 1", "required": false, "parameters": "0x85", "nonvolatile": true, "address": "0x30040000", "size_maximum": "0x40000", "extensions": ["sav"] },

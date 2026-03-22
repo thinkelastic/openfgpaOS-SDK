@@ -165,16 +165,25 @@ static void test_malloc(void) {
 static void test_file_slots(void) {
     section_start("File Slots");
 
-    /* FTAB auto-populates from Chip32 loader — just query what's there */
+    /* Dump the file table so we can see what Chip32 + kernel registered */
     int count = of_file_slot_count();
-    ASSERT("count >= 0", count >= 0);
-
-    if (count > 0) {
+    printf("\n  FTAB: %d entries\n", count);
+    for (int i = 0; i < count; i++) {
         of_file_slot_t slot;
-        ASSERT_EQ("get[0]", of_file_slot_get(0, &slot), 0);
-        ASSERT("name len", strlen(slot.filename) > 0);
+        if (of_file_slot_get(i, &slot) == 0)
+            printf("    [%d] slot=%d \"%s\"\n", i, (int)slot.slot_id, slot.filename);
     }
+
+    /* Also dump raw CRAM1 FTAB header to debug Chip32 getname */
+    volatile uint32_t *ftab = (volatile uint32_t *)0x39280000;
+    printf("  CRAM1 @0x39280000: %08X %08X\n", (unsigned)ftab[0], (unsigned)ftab[1]);
+
+    ASSERT("count >= 1", count >= 1);  /* At least os.bin from kernel */
+
     of_file_slot_t slot;
+    ASSERT_EQ("get[0]", of_file_slot_get(0, &slot), 0);
+    ASSERT("name len", strlen(slot.filename) > 0);
+
     ASSERT_EQ("oob", of_file_slot_get(99, &slot), -1);
 
     /* fopen on unknown file should return NULL (no DMA hang) */
