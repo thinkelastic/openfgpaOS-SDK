@@ -1,164 +1,177 @@
 # openfpgaOS SDK
 
-Build games and apps for the Analogue Pocket using the openfpgaOS operating system.
+Build games for the [Analogue Pocket](https://www.analogue.co/pocket) in C.
 
-**Platform:** RISC-V (VexRiscv) @ 100 MHz, 320x240 indexed color, 48 kHz stereo audio, YM2151 FM synthesis.
+## Getting Started
 
-## Prerequisites
+### 1. Fork and clone
 
-A RISC-V cross-compiler targeting `rv32imafc`:
+```bash
+git clone https://github.com/YOUR_USERNAME/openfpgaOS-SDK.git
+cd openfpgaOS-SDK
+```
 
+### 2. Check your toolchain
+
+```bash
+./setup.sh
+```
+
+You need a RISC-V GCC:
 - **Arch:** `pacman -S riscv64-elf-gcc`
 - **macOS:** `brew install riscv64-elf-gcc`
 - **Ubuntu:** `apt install gcc-riscv64-unknown-elf`
 
-Optional: SDL2 for PC testing (`sdl2-config` must be in PATH).
-
-## Quick Start
+### 3. Create your game
 
 ```bash
-./setup.sh          # Check toolchain
-make                # Build app.elf
-make pc && ./app_pc # Test on PC (needs SDL2)
+./customize.sh
 ```
+
+Follow the prompts. This creates:
+- `src/<gamename>/main.c` — a hello world stub to start from
+- `dist/<gamename>/` — the core packaging config
+
+### 4. Build and deploy
+
+```bash
+make               # builds all apps → build/sdk/
+make deploy         # copies to Pocket SD card
+```
+
+## Writing Your Game
+
+Edit `src/<gamename>/main.c`:
+
+```c
+#include "of.h"
+#include <stdio.h>
+
+int main(void) {
+    of_video_init();
+
+    uint8_t *fb = of_video_surface();
+    for (int y = 0; y < 240; y++)
+        for (int x = 0; x < 320; x++)
+            fb[y * 320 + x] = x ^ y;
+
+    of_video_flip();
+    printf("Hello world!\n");
+
+    while (1) {
+        of_input_poll();
+        if (of_btn_pressed(OF_BTN_A)) {
+            // handle input
+        }
+        of_delay_ms(16);
+    }
+}
+```
+
+### Standard C library
+
+The SDK provides standard headers through the OS kernel's jump table:
+
+```c
+#include <stdio.h>    // printf, fprintf, sprintf, sscanf,
+                      // fopen, fclose, fread, fwrite, fseek, ftell
+#include <stdlib.h>   // malloc, free, calloc, realloc, atoi, atof,
+                      // strtol, strtod, qsort, bsearch, rand
+#include <string.h>   // memcpy, memset, strlen, strcmp, strdup,
+                      // strcat, strtok, memchr, ...
+#include <math.h>     // sinf, cosf, sqrtf, powf, logf, fabsf, ...
+#include <ctype.h>    // toupper, tolower, isalpha, isdigit, isspace, ...
+```
+
+No musl or newlib needed — everything runs through the OS.
+
+### API modules
+
+Include `"of.h"` for the full API:
+
+| Module | Description |
+|--------|-------------|
+| **Video** | 320×240 indexed framebuffer, 256-color palette, double buffering |
+| **Audio** | 48 kHz stereo PCM, sample streaming, YM2151 FM synthesis |
+| **Input** | D-pad, face buttons, shoulders, triggers, joystick (2 players) |
+| **Timer** | Microsecond/millisecond timing, delays |
+| **Save** | Up to 10 persistent save slots, up to 256KB each |
+| **File** | Read data files from SD card (up to 4 data slots) |
+
+### Save system
+
+```c
+of_save_write(0, data, 0, sizeof(data));
+of_save_flush_size(0, sizeof(data));
+
+of_save_read(0, data, 0, sizeof(data));
+```
+
+### PC build
+
+Test on your computer with SDL2:
+
+```bash
+make pc
+./app_pc
+```
+
+## Scripts
+
+| Script | What it does |
+|--------|-------------|
+| `setup.sh` | Checks RISC-V toolchain is installed |
+| `customize.sh` | Creates a new game: stub source + core config |
+| `deploy.sh` | Copies `build/sdk/` to the Pocket SD card |
+| `package.sh` | ZIPs a game core for distribution |
+
+### Packaging a standalone game
+
+After `customize.sh`, your game can be packaged as its own Pocket menu entry:
+
+```bash
+./package.sh GameName      # creates releases/GameName.zip
+```
+
+Users extract the ZIP to their SD card root.
+
+## Updating
+
+When a new SDK version is released:
+
+```bash
+git remote add upstream https://github.com/ThinkElastic/openfpgaOS-SDK.git
+git fetch upstream
+git rebase upstream/main
+make clean && make
+```
+
+Your game source (`src/<gamename>/`) won't conflict — SDK files are clearly separated.
 
 ## Project Structure
 
 ```
 openfpgaOS-SDK/
-├── Makefile        # Build system -- add your .c files to SRCS
-├── app.ld          # Linker script (don't modify)
-├── main.c          # Your app (edit this!)
-├── os.bin          # Pre-built OS kernel (download from releases)
-├── sdk/            # SDK headers and runtime (don't modify)
-│   ├── of.h        #   Main API -- #include "of.h"
-│   ├── of_libc.h   #   libc jump table (used by wrapper headers)
-│   ├── of_sdl2.c   #   SDL2 backend for PC testing
-│   ├── crt/        #   C runtime startup
-│   └── libc_include/   Standard C headers (string.h, math.h, etc.)
-└── dist/           # Analogue Pocket core packaging
+├── Makefile              ← build all apps, create build/sdk/
+├── src/
+│   ├── <gamename>/       ← YOUR game source (created by customize.sh)
+│   ├── apps/             ← bundled example apps
+│   └── sdk/              ← headers, libc, CRT, build rules
+│       ├── include/      ← openfpgaOS API (of.h, of_video.h, ...)
+│       ├── libc/         ← C standard library wrappers
+│       ├── crt/          ← startup code + linker script
+│       └── pc/           ← SDL2 shim for desktop builds
+├── dist/
+│   ├── sdk/              ← shared core configs
+│   └── <gamename>/       ← standalone game core (from customize.sh)
+├── runtime/              ← FPGA bitstream, OS binary, loader
+├── build/                ← build output (gitignored)
+├── customize.sh
+├── deploy.sh
+├── package.sh
+└── setup.sh
 ```
 
-## Writing Your App
+## Reference
 
-```c
-#include "of.h"
-#include <string.h>  // memcpy, memset, etc. (provided by OS)
-#include <math.h>    // sinf, cosf, etc. (provided by OS)
-
-int main(void) {
-    of_video_init();
-
-    while (1) {
-        of_input_poll();
-        if (of_btn_pressed(BTN_A)) { /* ... */ }
-
-        of_video_clear(0);
-        // draw your game here
-        of_video_flip();
-    }
-}
-```
-
-Add more `.c` files to `SRCS` in the Makefile.
-
-## API Overview
-
-| Subsystem | Functions |
-|-----------|-----------|
-| **Video** | `of_video_init`, `of_video_surface`, `of_video_flip`, `of_video_sync`, `of_video_clear`, `of_video_palette`, `of_video_palette_bulk`, `of_video_pixel` |
-| **Input** | `of_input_poll`, `of_btn`, `of_btn_pressed`, `of_btn_released`, `of_btn_p2`, `of_input_state` |
-| **Audio PCM** | `of_audio_init`, `of_audio_write`, `of_audio_free` |
-| **Audio FM** | `of_opm_write`, `of_opm_reset` |
-| **Timer** | `of_time_us`, `of_time_ms`, `of_delay_us`, `of_delay_ms` |
-| **Save** | `of_save_read`, `of_save_write`, `of_save_flush`, `of_save_erase` |
-| **File I/O** | `of_file_read`, `of_file_size` |
-| **Terminal** | `of_print`, `of_print_char`, `of_print_clear`, `of_print_at` |
-| **Tiles** | `of_tile_enable`, `of_tile_scroll`, `of_tile_set`, `of_tile_load_map`, `of_tile_load_chr` |
-| **Sprites** | `of_sprite_enable`, `of_sprite_set`, `of_sprite_move`, `of_sprite_load_chr`, `of_sprite_hide` |
-| **Link** | `of_link_send`, `of_link_recv`, `of_link_status` |
-| **System** | `of_exit` |
-
-See `sdk/of.h` for full documentation.
-
-## Standard C Library
-
-The OS provides 52 libc functions via a jump table -- no static linking needed. Use standard headers:
-
-- `<string.h>` -- memcpy, memset, strlen, strcmp, ...
-- `<stdlib.h>` -- malloc, free, rand, qsort, ...
-- `<stdio.h>`  -- snprintf, printf
-- `<math.h>`   -- sinf, cosf, sqrtf, atan2f, ...
-
-## Loading Data Files
-
-Place assets in data slot 3. Edit `dist/instances/My App.json`:
-
-```json
-{
-    "instance": {
-        "magic": "APF_VER_1",
-        "variant_select": { "id": 666, "select": false },
-        "data_slots": [
-            { "id": 1, "filename": "os.bin" },
-            { "id": 2, "filename": "app.elf" },
-            { "id": 3, "filename": "mydata.dat" }
-        ]
-    }
-}
-```
-
-Then in code: `of_file_read(3, offset, buffer, length);`
-
-## Adding Save Support
-
-Add a save slot to your instance JSON:
-
-```json
-{
-    "id": 10,
-    "name": "Saves",
-    "required": false,
-    "parameters": "0x84",
-    "extensions": ["sav"],
-    "nonvolatile": true,
-    "address": "0x03C00000",
-    "size_maximum": "0x00060000",
-    "filename": "MyGame.sav"
-}
-```
-
-## Deploying to Pocket
-
-1. Get `bitstream.rbf_r` and `os.bin` from the openfpgaOS releases
-2. Place `os.bin` in this directory
-3. Run: `make install SDCARD=/path/to/sdcard`
-4. Copy `bitstream.rbf_r` to `Cores/ThinkElastic.openfpgaOS/` on the SD card
-
-## Button Mapping
-
-Edit `dist/input.json` to customize button names shown on the Pocket.
-
-## PC Testing
-
-The SDL2 backend maps keys: Arrow keys = D-pad, Z = A, X = B, A = X, S = Y, Q/W = L1/R1, Enter = Start, RShift = Select.
-
-## Updating the SDK
-
-```bash
-./update.sh          # Latest release
-./update.sh v0.2     # Specific version
-```
-
-This replaces `sdk/`, `app.ld`, `os.bin`, and core dist files. Your source files (`main.c`, `Makefile`, `dist/input.json`, instance JSONs) are never overwritten.
-
-## Platform Specs
-
-| Feature | Value |
-|---------|-------|
-| CPU | VexRiscv RV32IMAFC @ 100 MHz |
-| Display | 320x240, 8-bit indexed, 256-color palette |
-| Audio | 48 kHz stereo PCM + YM2151 FM (8 channels) |
-| Input | 2 controllers (d-pad, ABXY, L/R, sticks, triggers) |
-| SDRAM | 64 MB |
-| Saves | 6 x 64 KB slots (nonvolatile) |
+This SDK builds apps for [openfpgaOS](https://github.com/ThinkElastic/openfpgaOS) — a RISC-V operating system (VexRiscv rv32imafc, 100 MHz) running on the Analogue Pocket's Cyclone V FPGA. See the openfpgaOS repo for architecture details, FPGA design, and OS internals.

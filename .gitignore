@@ -2,4 +2,5 @@
 *.elf
 app_pc
 save_*.bin
-os.bin
+build/
+releases/

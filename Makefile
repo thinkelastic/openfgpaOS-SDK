@@ -1,104 +1,68 @@
-# openfpgaOS SDK -- Application Makefile
+# openfpgaOS SDK Makefile
 #
 # Usage:
-#   make              Build app.elf for Analogue Pocket
-#   make pc           Build for PC (requires SDL2)
-#   make install      Copy to SD card (set SDCARD= path)
-#   make clean        Remove build artifacts
+#   make              Build all apps, create release/
+#   make deploy       Copy release/ to Pocket SD card
+#   make clean        Remove all build artifacts
+#   make core         Build a standalone game core (interactive)
+#   make package      Package game core into a ZIP
 
-# ── Configuration ──────────────────────────────────────────────────────
-APP_NAME ?= My App
+# ── Paths ────────────────────────────────────────────────────────
+CORE_ID      = ThinkElastic.openfpgaOS
+PLATFORM     = openfpgaos
+RELEASE      = build/sdk
+REL_CORE     = $(RELEASE)/Cores/$(CORE_ID)
+REL_ASSETS   = $(RELEASE)/Assets/$(PLATFORM)/common
+REL_INSTANCE = $(RELEASE)/Assets/$(PLATFORM)/$(CORE_ID)
+REL_PLATFORM = $(RELEASE)/Platforms
+RUNTIME      = runtime
 
-# ── Toolchain (auto-detect) ───────────────────────────────────────────
-CROSS ?= $(shell which riscv64-unknown-elf-gcc >/dev/null 2>&1 && echo riscv64-unknown-elf- || echo riscv64-elf-)
-CC      = $(CROSS)gcc
-LD      = $(CROSS)gcc
-AS      = $(CROSS)gcc
-OBJDUMP = $(CROSS)objdump
-SIZE    = $(CROSS)size
+# ── Default target ───────────────────────────────────────────────
+all: apps release
 
-# ── Architecture ──────────────────────────────────────────────────────
-ARCH = rv32imafc
-ABI  = ilp32f
+# ── Build all bundled apps ───────────────────────────────────────
+apps:
+	$(MAKE) -C src/apps
 
-# ── Paths ─────────────────────────────────────────────────────────────
-SDK_DIR = sdk
-CRT_DIR = $(SDK_DIR)/crt
+# ── Create release/ directory ────────────────────────────────────
+release: apps
+	@echo "Creating release/..."
+	@mkdir -p $(REL_CORE) $(REL_ASSETS) $(REL_INSTANCE) $(REL_PLATFORM)/_images
+	@# Core: bitstream + loader
+	@cp $(RUNTIME)/bitstream.rbf_r $(REL_CORE)/
+	@cp $(RUNTIME)/loader.bin $(REL_CORE)/
+	@# Core: JSON configs + icon (from dist/sdk/ if present)
+	@[ -d dist/sdk/core ] && cp dist/sdk/core/*.json dist/sdk/core/*.bin $(REL_CORE)/ 2>/dev/null || true
+	@# Platform
+	@[ -d dist/sdk/platform ] && cp dist/sdk/platform/*.json $(REL_PLATFORM)/ 2>/dev/null || true
+	@[ -d dist/sdk/platform/_images ] && cp dist/sdk/platform/_images/*.bin $(REL_PLATFORM)/_images/ 2>/dev/null || true
+	@# OS binary
+	@cp $(RUNTIME)/os.bin $(REL_ASSETS)/
+	@# Bundled apps + data files
+	@for d in src/apps/*/; do \
+		name=$$(basename "$$d"); \
+		[ -f "$$d/app.elf" ] && cp "$$d/app.elf" "$(REL_ASSETS)/$$name.elf" || true; \
+		find "$$d" -maxdepth 1 \( -name "*.mid" -o -name "*.wav" -o -name "*.dat" -o -name "*.png" \) \
+			-exec cp {} "$(REL_ASSETS)/" \; 2>/dev/null || true; \
+	done
+	@# Instance JSONs
+	@[ -d dist/sdk/instances ] && cp dist/sdk/instances/*.json $(REL_INSTANCE)/ 2>/dev/null || true
+	@echo "Release ready: $(RELEASE)/"
 
-# ── Sources (add your .c files here) ─────────────────────────────────
-SRCS = main.c
+# ── Deploy to SD card ────────────────────────────────────────────
+deploy: release
+	@./deploy.sh
 
-# ── Compiler flags ────────────────────────────────────────────────────
-CFLAGS  = -march=$(ARCH) -mabi=$(ABI) -O2 -Wall -Wextra
-CFLAGS += -ffreestanding -nostdlib -nostartfiles
-CFLAGS += -ffunction-sections -fdata-sections
-CFLAGS += -fno-builtin
-CFLAGS += -nostdinc -I$(SDK_DIR)/libc_include -I$(SDK_DIR) -I.
-CFLAGS += -isystem $(shell $(CC) -print-file-name=include)
-
-LDFLAGS  = -march=$(ARCH) -mabi=$(ABI)
-LDFLAGS += -nostdlib -nostartfiles -static
-LDFLAGS += -T app.ld -Wl,--gc-sections
-
-ASFLAGS = -march=$(ARCH)_zicsr -mabi=$(ABI)
-
-LIBGCC = $(shell $(CC) -march=$(ARCH) -mabi=$(ABI) -print-libgcc-file-name)
-
-# ── Objects ───────────────────────────────────────────────────────────
-CRT_START = $(CRT_DIR)/start.o
-OBJS      = $(CRT_START) $(SRCS:.c=.o)
-
-# ── Targets ───────────────────────────────────────────────────────────
-all: app.elf
-	$(SIZE) $<
-
-app.elf: $(OBJS) app.ld
-	$(LD) $(LDFLAGS) -o $@ $(OBJS) $(LIBGCC)
-
-$(CRT_DIR)/%.o: $(CRT_DIR)/%.S
-	$(AS) $(ASFLAGS) -c -o $@ $<
-
-%.o: %.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# ── PC build (SDL2) ──────────────────────────────────────────────────
-PC_CC ?= cc
-SDL_CFLAGS := $(shell sdl2-config --cflags 2>/dev/null || pkg-config --cflags sdl2 2>/dev/null)
-SDL_LIBS   := $(shell sdl2-config --libs 2>/dev/null || pkg-config --libs sdl2 2>/dev/null)
-
-pc: app_pc
-	@echo "Built app_pc -- run with ./app_pc"
-
-app_pc: $(SRCS) $(SDK_DIR)/of_sdl2.c $(SDK_DIR)/of.h
-	$(PC_CC) -DOF_PC -I$(SDK_DIR) -I. -O2 -Wall -Wextra \
-		$(SRCS) $(SDK_DIR)/of_sdl2.c \
-		$(SDL_CFLAGS) $(SDL_LIBS) -lm -o $@
-
-# ── Install to SD card ───────────────────────────────────────────────
-SDCARD ?= /mnt/sdcard
-
-install: app.elf
-	@echo "Installing to $(SDCARD)..."
-	@mkdir -p "$(SDCARD)/Cores/ThinkElastic.openfpgaOS"
-	@cp dist/core.json       "$(SDCARD)/Cores/ThinkElastic.openfpgaOS/"
-	@cp dist/audio.json      "$(SDCARD)/Cores/ThinkElastic.openfpgaOS/"
-	@cp dist/video.json      "$(SDCARD)/Cores/ThinkElastic.openfpgaOS/"
-	@cp dist/input.json      "$(SDCARD)/Cores/ThinkElastic.openfpgaOS/"
-	@cp dist/data.json       "$(SDCARD)/Cores/ThinkElastic.openfpgaOS/"
-	@cp dist/interact.json   "$(SDCARD)/Cores/ThinkElastic.openfpgaOS/"
-	@cp dist/variants.json   "$(SDCARD)/Cores/ThinkElastic.openfpgaOS/"
-	@cp dist/icon.bin        "$(SDCARD)/Cores/ThinkElastic.openfpgaOS/"
-	@mkdir -p "$(SDCARD)/Cores/ThinkElastic.openfpgaOS/Platforms/_images"
-	@cp dist/platforms/openfpgaos.json       "$(SDCARD)/Cores/ThinkElastic.openfpgaOS/Platforms/"
-	@cp dist/platforms/_images/openfpgaos.bin "$(SDCARD)/Cores/ThinkElastic.openfpgaOS/Platforms/_images/"
-	@mkdir -p "$(SDCARD)/Assets/openfpgaos/common"
-	@cp os.bin    "$(SDCARD)/Assets/openfpgaos/common/"
-	@cp app.elf   "$(SDCARD)/Assets/openfpgaos/common/"
-	@cp "dist/instances/$(APP_NAME).json" "$(SDCARD)/Assets/openfpgaos/common/"
-	@echo "Done. Copy your bitstream.rbf_r to $(SDCARD)/Cores/ThinkElastic.openfpgaOS/"
-
-# ── Clean ─────────────────────────────────────────────────────────────
+# ── Clean ────────────────────────────────────────────────────────
 clean:
-	rm -f $(OBJS) app.elf app_pc
+	$(MAKE) -C src/apps clean
+	rm -rf build releases
 
-.PHONY: all pc install clean
+# ── Core packaging ───────────────────────────────────────────────
+core:
+	./customize.sh
+
+package:
+	./package.sh
+
+.PHONY: all apps release deploy clean core package
