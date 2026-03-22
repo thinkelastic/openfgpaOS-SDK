@@ -9,15 +9,27 @@
 #include "of_libc.h"
 
 typedef void FILE;
-#define stdout (__of_libc->stdout_ptr)
-#define stderr (__of_libc->stderr_ptr)
 #define NULL   ((void *)0)
 #define EOF    (-1)
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
 
-/* Variadic functions use macros to call through the table */
+#define stdout (__of_libc->stdout_ptr)
+#define stderr (__of_libc->stderr_ptr)
+
+/* Inline functions BEFORE macros (so struct member access works) */
+static inline int puts(const char *s) {
+    __of_libc->printf("%s\n", s);
+    return 0;
+}
+static inline int putchar(int c) {
+    char buf[2] = {(char)c, 0};
+    __of_libc->printf("%s", buf);
+    return c;
+}
+
+/* Variadic and file I/O as macros (call through jump table) */
 #define printf    __of_libc->printf
 #define fprintf   __of_libc->fprintf
 #define sprintf   __of_libc->sprintf
@@ -25,8 +37,6 @@ typedef void FILE;
 #define vsnprintf __of_libc->vsnprintf
 #define vsprintf  __of_libc->vsprintf
 #define sscanf    __of_libc->sscanf
-
-/* File I/O */
 #define fopen     __of_libc->fopen
 #define fclose    __of_libc->fclose
 #define fread     __of_libc->fread

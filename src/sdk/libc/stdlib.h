@@ -37,6 +37,15 @@ static inline double strtod(const char *s, char **e)                         { r
 static inline long long strtoll(const char *s, char **e, int b)              { return __of_libc->strtoll(s, e, b); }
 static inline unsigned long long strtoull(const char *s, char **e, int b)    { return __of_libc->strtoull(s, e, b); }
 
+/* exit/abort: switch back to terminal display, then halt */
+static inline void exit(int status) {
+    (void)status;
+    /* REG32 at 0x40000008 = display mode, 0 = terminal */
+    *(volatile unsigned int *)0x40000008 = 0;
+    while(1) {}
+}
+static inline void abort(void) { exit(1); }
+
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
 #define NULL ((void *)0)

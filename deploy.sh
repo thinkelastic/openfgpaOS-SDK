@@ -113,19 +113,6 @@ if [ -d "$SDK_DIR/dist/sdk/instances" ]; then
     echo -e "  ${GREEN}✓${RESET} Instance JSONs"
 fi
 
-# ── Your app ──────────────────────────────────────────────────────
-if [ -f "$SDK_DIR/app.elf" ]; then
-    cp "$SDK_DIR/app.elf" "$ASSETS_COMMON/"
-    echo -e "  ${GREEN}✓${RESET} Your app.elf"
-
-    # Copy your data files (if any)
-    for f in "$SDK_DIR"/*.grp "$SDK_DIR"/*.dat "$SDK_DIR"/*.mid "$SDK_DIR"/*.wav "$SDK_DIR"/*.png; do
-        [ -f "$f" ] && cp "$f" "$ASSETS_COMMON/" && \
-            echo -e "  ${GREEN}✓${RESET} $(basename "$f")"
-    done
-else
-    echo -e "  ${YELLOW}!${RESET} No app.elf found — run 'make' first"
-fi
 
 # ── Sync ──────────────────────────────────────────────────────────
 sync

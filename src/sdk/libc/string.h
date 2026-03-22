@@ -29,5 +29,28 @@ static inline char *strtok(char *s, const char *d)             { return __of_lib
 static inline size_t strspn(const char *s, const char *a)      { return __of_libc->strspn(s, a); }
 static inline size_t strcspn(const char *s, const char *r)     { return __of_libc->strcspn(s, r); }
 
+static inline int strcasecmp(const char *a, const char *b) {
+    while (*a && *b) {
+        int ca = (*a >= 'A' && *a <= 'Z') ? *a + 32 : *a;
+        int cb = (*b >= 'A' && *b <= 'Z') ? *b + 32 : *b;
+        if (ca != cb) return ca - cb;
+        a++; b++;
+    }
+    return *(const unsigned char *)a - *(const unsigned char *)b;
+}
+
+static inline int strncasecmp(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n && *a && *b; i++, a++, b++) {
+        int ca = (*a >= 'A' && *a <= 'Z') ? *a + 32 : *a;
+        int cb = (*b >= 'A' && *b <= 'Z') ? *b + 32 : *b;
+        if (ca != cb) return ca - cb;
+    }
+    return 0;
+}
+
+#define stricmp   strcasecmp
+#define strnicmp  strncasecmp
+#define _stricmp  strcasecmp
+
 #endif /* OF_PC */
 #endif /* _OF_STRING_H */
