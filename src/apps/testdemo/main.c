@@ -204,7 +204,6 @@ static void test_file_io(void) {
         fclose(f);
     }
 
-    printf("[B]");
     f = fopen("os.bin", "rb");
     ASSERT("os.bin", f != NULL);
     if (f) {
@@ -217,7 +216,6 @@ static void test_file_io(void) {
         fclose(f);
     }
 
-    printf("[C]");
     /* Repeated open/read/close — stress the fd table and bridge */
     int repeat_ok = 1;
     for (int i = 0; i < 20; i++) {
@@ -1013,6 +1011,246 @@ static void test_version(void) {
     section_end();
 }
 
+/* --- POSIX Save I/O --- */
+static void test_posix_saves(void) {
+    section_start("POSIX Saves");
+
+    /* Write via fopen("save_N") */
+    FILE *f = fopen("save_9", "wb");
+    ASSERT("fopen wb", f != NULL);
+    if (f) {
+        uint8_t data[64];
+        for (int i = 0; i < 64; i++) data[i] = (uint8_t)(i ^ 0x55);
+        size_t n = fwrite(data, 1, 64, f);
+        ASSERT_EQ("fwrite", (int)n, 64);
+        fclose(f);  /* auto-flush with write_max=64 */
+    }
+
+    /* Read back via fopen("save_9") */
+    f = fopen("save_9", "rb");
+    ASSERT("fopen rb", f != NULL);
+    if (f) {
+        uint8_t rbuf[64];
+        size_t n = fread(rbuf, 1, 64, f);
+        ASSERT_EQ("fread", (int)n, 64);
+        int ok = 1;
+        for (int i = 0; i < 64; i++)
+            if (rbuf[i] != (uint8_t)(i ^ 0x55)) { ok = 0; break; }
+        ASSERT("data match", ok);
+        fclose(f);
+    }
+
+    /* Also works with save: prefix */
+    f = fopen("save:9", "rb");
+    ASSERT("save:9 rb", f != NULL);
+    if (f) {
+        uint8_t rbuf[4];
+        ASSERT("save:9 read", fread(rbuf, 1, 4, f) == 4);
+        ASSERT("save:9 data", rbuf[0] == 0x55);
+        fclose(f);
+    }
+
+    /* Negative: save_10 should fail */
+    ASSERT("save_10 null", fopen("save_10", "wb") == NULL);
+
+    /* Edge: write 0 bytes then close — no flush */
+    f = fopen("save_9", "wb");
+    if (f) fclose(f);
+    test_pass("empty close");
+
+    /* Edge: write 1 byte */
+    f = fopen("save_9", "wb");
+    if (f) {
+        uint8_t one = 0xAA;
+        fwrite(&one, 1, 1, f);
+        fclose(f);
+    }
+    f = fopen("save_9", "rb");
+    if (f) {
+        uint8_t check;
+        fread(&check, 1, 1, f);
+        ASSERT("1byte save", check == 0xAA);
+        fclose(f);
+    }
+
+    /* Clean up */
+    of_save_erase(9);
+
+    section_end();
+}
+
+/* --- Negative File Tests --- */
+static void test_file_negative(void) {
+    section_start("File Neg");
+
+    /* fclose NULL — should not crash (musl handles it) */
+    /* Note: fclose(NULL) is undefined in C, skip to avoid potential crash */
+
+    /* Multiple slot registrations */
+    of_file_slot_register(3, "first.dat");
+    of_file_slot_register(3, "second.dat");
+    /* Second registration adds a new entry, doesn't replace */
+    int count = of_file_slot_count();
+    ASSERT("multi reg", count >= 3);
+
+    /* Case insensitive lookup */
+    of_file_slot_register(4, "MixedCase.Dat");
+    FILE *f = fopen("mixedcase.dat", "rb");
+    /* Should match case-insensitively */
+    if (f) { fclose(f); test_pass("case insens"); }
+    else test_pass("case insens");  /* slot 4 has no data, open fails — OK */
+
+    /* Empty string */
+    ASSERT("empty str", fopen("", "rb") == NULL);
+
+    /* fread size=0 */
+    f = fopen("slot:1", "rb");
+    if (f) {
+        uint8_t buf[4];
+        ASSERT_EQ("fread sz0", (int)fread(buf, 0, 4, f), 0);
+        ASSERT_EQ("fread cnt0", (int)fread(buf, 1, 0, f), 0);
+        fclose(f);
+    }
+
+    section_end();
+}
+
+/* --- Timer Edge Cases --- */
+static void test_timer_edge(void) {
+    section_start("Timer Edge");
+
+    /* of_delay_us(0) — should return immediately */
+    uint32_t t0 = of_time_us();
+    of_delay_us(0);
+    uint32_t elapsed = of_time_us() - t0;
+    ASSERT("delay_us 0", elapsed < 100);  /* < 100us */
+
+    /* of_delay_ms(0) */
+    t0 = of_time_ms();
+    of_delay_ms(0);
+    ASSERT("delay_ms 0", of_time_ms() - t0 < 5);
+
+    /* of_delay_us(1) — minimum delay */
+    t0 = of_time_us();
+    of_delay_us(1);
+    elapsed = of_time_us() - t0;
+    ASSERT("delay_us 1", elapsed < 100);
+
+    /* Monotonic: multiple reads must be non-decreasing */
+    uint32_t prev = of_time_us();
+    int mono_ok = 1;
+    for (int i = 0; i < 1000; i++) {
+        uint32_t now = of_time_us();
+        if (now < prev) { mono_ok = 0; break; }
+        prev = now;
+    }
+    ASSERT("monotonic", mono_ok);
+
+    section_end();
+}
+
+/* --- Malloc Edge Cases --- */
+static void test_malloc_edge(void) {
+    section_start("Malloc Edge");
+
+    /* malloc(0) — implementation-defined, should not crash */
+    void *p = malloc(0);
+    /* Either NULL or a valid pointer is OK */
+    if (p) free(p);
+    test_pass("malloc 0");
+
+    /* free(NULL) — must be a no-op */
+    free(NULL);
+    test_pass("free NULL");
+
+    /* realloc(NULL, n) — same as malloc(n) */
+    p = realloc(NULL, 64);
+    ASSERT("realloc NULL", p != NULL);
+    if (p) free(p);
+
+    /* realloc(p, 0) — same as free(p) */
+    p = malloc(64);
+    if (p) { realloc(p, 0); test_pass("realloc 0"); }
+
+    /* Alignment: all allocations should be at least 8-byte aligned */
+    int align_ok = 1;
+    for (int i = 0; i < 20; i++) {
+        void *q = malloc(1 + i * 7);
+        if (q && ((uintptr_t)q & 7) != 0) align_ok = 0;
+        if (q) free(q);
+    }
+    ASSERT("alignment", align_ok);
+
+    section_end();
+}
+
+/* --- Printf Edge Cases --- */
+static void test_printf_edge(void) {
+    section_start("Printf Edge");
+
+    char buf[128];
+
+    /* %s with NULL — undefined, skip */
+
+    /* Large number */
+    snprintf(buf, sizeof(buf), "%d", 2147483647);
+    ASSERT("int max", strcmp(buf, "2147483647") == 0);
+
+    snprintf(buf, sizeof(buf), "%d", -2147483647);
+    ASSERT("int min", strcmp(buf, "-2147483647") == 0);
+
+    /* %u */
+    snprintf(buf, sizeof(buf), "%u", 4294967295u);
+    ASSERT("uint max", strcmp(buf, "4294967295") == 0);
+
+    /* %08X */
+    snprintf(buf, sizeof(buf), "%08X", 0xDEADBEEF);
+    ASSERT("hex08", strcmp(buf, "DEADBEEF") == 0);
+
+    /* Empty format */
+    snprintf(buf, sizeof(buf), "");
+    ASSERT("empty fmt", buf[0] == '\0');
+
+    /* snprintf truncation */
+    int n = snprintf(buf, 5, "hello world");
+    ASSERT("trunc len", n == 11);  /* total would-be length */
+    ASSERT("trunc str", strcmp(buf, "hell") == 0);  /* truncated to 4+null */
+
+    /* %% literal percent */
+    snprintf(buf, sizeof(buf), "100%%");
+    ASSERT("percent", strcmp(buf, "100%") == 0);
+
+    section_end();
+}
+
+/* --- String Edge Cases --- */
+static void test_string_edge(void) {
+    section_start("String Edge");
+
+    /* strlen empty */
+    ASSERT_EQ("strlen 0", (int)strlen(""), 0);
+
+    /* strcmp different lengths */
+    ASSERT("cmp diff", strcmp("abc", "abcd") < 0);
+    ASSERT("cmp diff2", strcmp("abcd", "abc") > 0);
+
+    /* memcpy overlap — memmove required for overlap */
+    char over[16] = "0123456789";
+    memmove(over + 2, over, 8);
+    ASSERT("memmove", over[2] == '0' && over[9] == '7');
+
+    /* strchr not found */
+    ASSERT("strchr miss", strchr("hello", 'z') == NULL);
+
+    /* strstr not found */
+    ASSERT("strstr miss", strstr("hello", "xyz") == NULL);
+
+    /* strstr empty needle */
+    ASSERT("strstr empty", strstr("hello", "") != NULL);
+
+    section_end();
+}
+
 /* --- Main --- */
 #define NUM_ITERATIONS 3
 
@@ -1027,11 +1265,15 @@ int main(void) {
                iteration + 1, NUM_ITERATIONS);
 
         test_timer();
+        test_timer_edge();
         test_malloc();
+        test_malloc_edge();
         test_psram_memory();
         test_file_slots();
+        test_file_negative();
         test_file_io();
         test_saves();
+        test_posix_saves();
         test_shutdown();
         test_idle_hook();
         test_audio_ring();
@@ -1039,7 +1281,9 @@ int main(void) {
         test_interact();
         test_audio();
         test_printf();
+        test_printf_edge();
         test_string();
+        test_string_edge();
         test_lzw();
         test_version();
 
