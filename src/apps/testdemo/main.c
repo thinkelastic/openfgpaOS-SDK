@@ -812,17 +812,18 @@ static void test_psram_memory(void) {
         ASSERT("cram0 walk1", ok);
     }
 
-    /* === CRAM0 address line test (write distinct values at power-of-2 offsets) === */
+    /* === CRAM0 address line test (uncached to avoid D-cache interference) === */
     {
+        volatile uint32_t *cram0_uc = (volatile uint32_t *)0x38000000;
         int ok = 1;
         /* Test address lines up to 2MB (512K words) */
         for (int bit = 0; bit < 19; bit++) {
             uint32_t offset = 1u << bit;
-            cram0[offset] = 0xA5000000 | offset;
+            cram0_uc[offset] = 0xA5000000 | offset;
         }
         for (int bit = 0; bit < 19; bit++) {
             uint32_t offset = 1u << bit;
-            if (cram0[offset] != (0xA5000000 | offset)) { ok = 0; break; }
+            if (cram0_uc[offset] != (0xA5000000 | offset)) { ok = 0; break; }
         }
         ASSERT("cram0 addr", ok);
     }
