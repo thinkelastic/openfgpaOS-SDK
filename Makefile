@@ -23,6 +23,15 @@ all: apps release
 # ── Build all bundled apps ───────────────────────────────────────
 apps:
 	$(MAKE) -C src/apps
+	@# Also build standalone games in src/<name>/ (created by customize.sh)
+	@for d in src/*/; do \
+		[ "$$d" = "src/apps/" ] || [ "$$d" = "src/sdk/" ] && continue; \
+		[ -f "$$d/main.c" ] || [ -f "$$d/of_main.c" ] || continue; \
+		name=$$(basename "$$d"); \
+		echo "Building standalone: $$name..."; \
+		$(MAKE) -C "$$d" -f $(CURDIR)/src/apps/app.mk SDK_DIR=$(CURDIR)/src/sdk || exit 1; \
+		[ -f "$$d/app.elf" ] && mv "$$d/app.elf" "$$d/$$name.elf" 2>/dev/null; \
+	done
 
 # ── Create release/ directory ────────────────────────────────────
 release: apps
@@ -42,6 +51,14 @@ release: apps
 	@for d in src/apps/*/; do \
 		name=$$(basename "$$d"); \
 		[ -f "$$d/app.elf" ] && cp "$$d/app.elf" "$(REL_ASSETS)/$$name.elf" || true; \
+		find "$$d" -maxdepth 1 \( -name "*.mid" -o -name "*.wav" -o -name "*.dat" -o -name "*.png" \) \
+			-exec cp {} "$(REL_ASSETS)/" \; 2>/dev/null || true; \
+	done
+	@# Standalone games (src/<name>/<name>.elf)
+	@for d in src/*/; do \
+		[ "$$d" = "src/apps/" ] || [ "$$d" = "src/sdk/" ] && continue; \
+		name=$$(basename "$$d"); \
+		[ -f "$$d/$$name.elf" ] && cp "$$d/$$name.elf" "$(REL_ASSETS)/" || true; \
 		find "$$d" -maxdepth 1 \( -name "*.mid" -o -name "*.wav" -o -name "*.dat" -o -name "*.png" \) \
 			-exec cp {} "$(REL_ASSETS)/" \; 2>/dev/null || true; \
 	done

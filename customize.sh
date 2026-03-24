@@ -22,7 +22,6 @@ SAVE_SIZE="0x40000"
 BATCH=0
 ICON=""
 OUTPUT=""
-ELF=""
 NAME=""
 SHORT=""
 SDK_ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -53,7 +52,6 @@ while [[ $# -gt 0 ]]; do
         --short)       SHORT="$2"; shift 2 ;;
         --platform)    PLATFORM="$2"; shift 2 ;;
         --version)     VERSION="$2"; shift 2 ;;
-        --elf)         ELF="$2"; shift 2 ;;
         --data)        DATA_FILES+=("$2"); shift 2 ;;
         --saves)       SAVES="$2"; shift 2 ;;
         --save-size)   SAVE_SIZE="$2"; shift 2 ;;
@@ -72,7 +70,6 @@ while [[ $# -gt 0 ]]; do
             echo "  --name NAME         Game display name"
             echo "  --short SHORT       Short name, no spaces"
             echo "  --author AUTHOR     Core author [ThinkElastic]"
-            echo "  --elf PATH          Path to game ELF binary"
             echo "  --data PATH         Data file (repeatable)"
             echo "  --saves N           Number of save slots [10]"
             echo "  --save-size HEX     Max save size per slot [0x40000]"
@@ -135,12 +132,6 @@ if [[ $BATCH -eq 0 ]]; then
     PLATFORM=$(ask "Platform ID" "$PLATFORM")
     echo
 
-    # ELF (optional — Enter to create a stub app)
-    ELF=$(ask "ELF binary path (Enter to create stub)" "$ELF")
-    if [[ -n "$ELF" ]]; then
-        check_file "$ELF" "ELF" || { echo "File not found."; exit 1; }
-    fi
-
     # Data files
     echo
     echo "Data files (one per line, empty line to finish):"
@@ -177,7 +168,6 @@ if [[ $BATCH -eq 0 ]]; then
     echo "  Short:     $SHORT"
     echo "  Author:    $AUTHOR"
     echo "  Version:   $VERSION"
-    echo "  ELF:       $ELF"
     for df in "${DATA_FILES[@]}"; do
         echo "  Data:      $(basename "$df")"
     done
@@ -191,13 +181,68 @@ fi
 
 # ── Validate required inputs ───────────────────────────────────────
 [[ -z "$NAME" ]] && { echo "Error: --name required"; exit 1; }
-[[ -z "$ELF" ]] && ELF=""
 [[ -z "$SHORT" ]] && SHORT=$(derive_short "$NAME")
 [[ -z "$PLATFORM" ]] && PLATFORM=$(echo "$SHORT" | tr '[:upper:]' '[:lower:]')
 [[ -z "$OUTPUT" ]] && OUTPUT="dist/$SHORT"
 
 CORE_ID="${AUTHOR}.${SHORT}"
-ELF_NAME=$(basename "$ELF")
+
+# ── Create stub app source and build ELF ─────────────────────────
+APP_SRC_DIR="$SDK_ROOT/src/$(echo "$SHORT" | tr '[:upper:]' '[:lower:]')"
+if [[ ! -d "$APP_SRC_DIR" ]]; then
+    mkdir -p "$APP_SRC_DIR"
+    cat > "$APP_SRC_DIR/main.c" << 'STUBEOF'
+/*
+ * Hello World — openfpgaOS stub app
+ *
+ * Build with: make
+ */
+
+#include "of.h"
+#include <stdio.h>
+#include <string.h>
+
+int main(void) {
+    of_video_init();
+
+    /* Set a simple grayscale palette */
+    for (int i = 0; i < 256; i++)
+        of_video_palette(i, (i << 16) | (i << 8) | i);
+
+    /* Draw a gradient */
+    uint8_t *fb = of_video_surface();
+    for (int y = 0; y < 240; y++)
+        memset(&fb[y * 320], y, 320);
+
+    of_video_flip();
+
+    printf("Hello from openfpgaOS!\n");
+    printf("Press any button...\n");
+
+    while (1) {
+        of_input_poll();
+        of_delay_ms(16);
+    }
+
+    return 0;
+}
+STUBEOF
+    ok "Created stub app: $APP_SRC_DIR/main.c"
+else
+    ok "App source exists: $APP_SRC_DIR/"
+fi
+
+SNAME=$(echo "$SHORT" | tr '[:upper:]' '[:lower:]')
+ELF_NAME="${SNAME}.elf"
+
+echo "  Building ELF..."
+make -C "$APP_SRC_DIR" -f "$SDK_ROOT/src/apps/app.mk" SDK_DIR="$SDK_ROOT/src/sdk" app.elf || {
+    fail "Failed to build ELF"; exit 1;
+}
+# Rename app.elf to <name>.elf
+mv "$APP_SRC_DIR/app.elf" "$APP_SRC_DIR/$ELF_NAME"
+ELF="$APP_SRC_DIR/$ELF_NAME"
+ok "Built $ELF"
 
 echo
 echo -e "${CYAN}Building core: $CORE_ID${RESET}"
@@ -384,50 +429,6 @@ done
 if [[ -n "$ICON" && -f "$ICON" ]]; then
     cp "$ICON" "$CORE_DIR/icon.bin"
     ok "Copied icon"
-fi
-
-# ── Create stub app source if it doesn't exist ───────────────────
-APP_SRC_DIR="$(cd "$(dirname "$0")" && pwd)/src/$(echo "$SHORT" | tr '[:upper:]' '[:lower:]')"
-if [[ ! -d "$APP_SRC_DIR" ]]; then
-    mkdir -p "$APP_SRC_DIR"
-    cat > "$APP_SRC_DIR/main.c" << 'STUBEOF'
-/*
- * Hello World — openfpgaOS stub app
- *
- * Build with: make
- */
-
-#include "of.h"
-#include <stdio.h>
-#include <string.h>
-
-int main(void) {
-    of_video_init();
-
-    /* Set a simple grayscale palette */
-    for (int i = 0; i < 256; i++)
-        of_video_palette(i, (i << 16) | (i << 8) | i);
-
-    /* Draw a gradient */
-    uint8_t *fb = of_video_surface();
-    for (int y = 0; y < 240; y++)
-        memset(&fb[y * 320], y, 320);
-
-    of_video_flip();
-
-    printf("Hello from openfpgaOS!\n");
-    printf("Press any button...\n");
-
-    while (1) {
-        of_input_poll();
-        of_delay_ms(16);
-    }
-
-    return 0;
-}
-STUBEOF
-    ok "Created stub app: src/apps/$(basename "$APP_SRC_DIR")/main.c"
-    echo "  Edit it, run 'make', then 'make deploy'"
 fi
 
 # ── Set up git remote for SDK upstream tracking ──────────────────
