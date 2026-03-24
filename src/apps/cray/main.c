@@ -40,7 +40,7 @@ struct camera {
 };
 
 void render(int xsz, int ysz, int samples);
-void renderbuf(int xsz, int ysz, uint16_t *fb, int samples);
+void renderbuf(int xsz, int ysz, int samples);
 struct vec3 trace(struct ray ray, int depth);
 struct vec3 shade(struct sphere *obj, struct spoint *sp, int depth);
 struct vec3 reflect(struct vec3 v, struct vec3 n);
@@ -110,33 +110,43 @@ int main(int argc, char **argv) {
         for (int i = 0; i < xres  * yres*2; i++) fb[i] = 0;
 
 	//draw_string("rendering...", 0, 8, front_buffer);
-    printf("rendering...\n");
+	of_print_at(0,0);
+    of_print("rendering...");
 	create_scene();
 
 	start_time = of_time_ms(); //get_millisec();
-	render(xres, yres, 1);
+	renderbuf(xres, yres, 1);
 	rend_time = of_time_ms(); - start_time;
 
 	//memcpy(back_buffer->pixels, front_buffer->pixels, xres * yres * sizeof(uint16_t));
     //of_video_flip();
 
-	// {	/* stats */
-	// 	int line = 0;
-	// 	sprintf(str, "rendering time: %lu sec", rend_time / 1000);
-	// 	draw_string(str, 0, line++ * 16, front_buffer);
-	// 	sprintf(str, "    (%lu msec)", rend_time);
-	// 	draw_string(str, 0, line++ * 16, front_buffer);
-	// 	line++;
+	{	/* stats */
+		int line = 0;
+		sprintf(str, "rendering time: %lu sec", rend_time / 1000);
+		of_print_at(0,line);
+		of_print(str);
+		//draw_string(str, 0, line++ * 16, front_buffer);
 
-	// 	sprintf(str, "total rays cast: %u", rays);
-	// 	draw_string(str, 0, line++ * 16, front_buffer);
-	// 	sprintf(str, "   primary rays: %u", prim_rays);
-	// 	draw_string(str, 0, line++ * 16, front_buffer);
-	// 	line++;
+		line++;
+		sprintf(str, "    (%lu msec)", rend_time);
+		of_print_at(0,line);
+		of_print(str);
+		//draw_string(str, 0, line++ * 16, front_buffer);
 
-	// 	draw_string("Press any key to clear text", 0, line++ * 16, front_buffer);
-	// 	getchar();
-	// }
+		line++;
+		sprintf(str, "total rays cast: %u", rays);
+		of_print_at(0,line);
+		of_print(str);
+		//draw_string(str, 0, line++ * 16, front_buffer);
+
+		line++;
+		sprintf(str, "   primary rays: %u", prim_rays);
+		of_print_at(0,line);
+		of_print(str);
+		//draw_string(str, 0, line++ * 16, front_buffer);
+
+	}
 	//flip();
 	
 	//clr_int();
@@ -503,9 +513,9 @@ void create_scene(void) {
 }
 
 
-void renderbuf(int xsz, int ysz, uint16_t *fb, int samples) {
+void renderbuf(int xsz, int ysz, int samples) {
 	int i, j, k, x, y;
-	uint16_t *fb16;
+	uint16_t *fb16, *tmpfb;
 	char *wbuf;
 	uint16_t *temp_fb = malloc(153600);  // ✓ Buffer temporal
 	char *tmp = malloc(76800);
@@ -513,7 +523,8 @@ void renderbuf(int xsz, int ysz, uint16_t *fb, int samples) {
 	for(k=START_PSIZE; k>0; k>>=1) {
 		int scanoffs = (k - 1) * xsz;
 
-		fb16 = temp_fb;
+		fb16 = of_video_surface16();
+		tmpfb = temp_fb;
 		wbuf = tmp;
 		for(j=0; j<ysz; j+=k) {
 			
@@ -530,10 +541,10 @@ void renderbuf(int xsz, int ysz, uint16_t *fb, int samples) {
 								MIN((uint16_t)(col.z * 255.0), 255));
 					*wbuf = 1;
 				} else {
-					pixel = *fb16;
+					pixel = *tmpfb;
 				}
 				
-				uint16_t *sub = fb16;
+				uint16_t *sub = tmpfb;
 				for(y=0; y<k; y++) {
 					for(x=0; x<k; x++) {
 						if(x || y || !calced) {
@@ -544,16 +555,15 @@ void renderbuf(int xsz, int ysz, uint16_t *fb, int samples) {
 					sub += xsz - k;
 				}
 
-				fb16 += k;
+				tmpfb += k;
 				wbuf += k;
 			}
-			fb16 += scanoffs;
+			tmpfb += scanoffs;
 			wbuf += scanoffs;
 		}
 		// ✓ Copiar buffer temporal al framebuffer final de una vez
-		memcpy(fb, temp_fb, xsz * ysz * sizeof(uint16_t));
+		memcpy(fb16, temp_fb, xsz * ysz * sizeof(uint16_t));
 		of_video_flip();
-		//of_video_flush();
 	}
 
 	free(temp_fb);
