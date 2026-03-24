@@ -556,7 +556,7 @@ static uint8_t scaled_tl(const uint8_t *inst, int velocity, int ch_vol) {
     level = (level * M.master_volume) / 255;
     /* Attenuation: 0 at max level, 63 at zero level (full OPL3 range).
      * Hardware mix in audio_output.v scales OPL 5x relative to PCM. */
-    int atten = 63 - (level * 63 / 127);
+    int atten = 63 - (level * 55 / 127); //bajado de 63 a 50, ya que hay excesiva atenuación
     int tl = base_tl + atten;
     if (tl > 63) tl = 63;
     return (uint8_t)((inst[7] & 0xC0) | tl);

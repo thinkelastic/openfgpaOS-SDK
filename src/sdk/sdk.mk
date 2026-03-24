@@ -47,8 +47,8 @@ LIBGCC = $(shell $(CC) -march=$(ARCH) -mabi=$(ABI) -print-libgcc-file-name)
 
 # ── Objects ───────────────────────────────────────────────────────
 CRT_START = $(CRT_DIR)/start.o
-CRT_POSIX = $(CRT_DIR)/of_posix.o
-CRT_MIDI  = $(CRT_DIR)/of_midi.o
+CRT_POSIX = $(SDK_DIR)/of_posix.o
+CRT_MIDI  = $(SDK_DIR)/of_midi.o
 APP_OBJS  = $(SRCS:.c=.o)
 OBJS      = $(CRT_START) $(CRT_POSIX) $(CRT_MIDI) $(APP_OBJS)
 

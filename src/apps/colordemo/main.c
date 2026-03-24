@@ -166,7 +166,7 @@ int main(void) {
 
         /* Clear framebuffer */
         uint8_t *fb = of_video_surface();
-        for (int i = 0; i < W * H * 2; i++) fb[i] = 0;
+        for (int i = 0; i < W * H / 2; i++) fb[i] = 0;
 
         /* Draw test pattern */
         draw_fns[mode]();
