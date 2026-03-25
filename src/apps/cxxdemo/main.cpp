@@ -6,12 +6,15 @@
  *   - Operator new / delete (heap allocation)
  *   - Static constructors / destructors
  *   - Templates
+ *   - std::cout / std::cerr  (iostream output)
+ *   - std::cin               (iostream input, reads from fd 0)
  */
 
 #include "of.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <iostream>
 
 /* ── Static constructor test ──────────────────────────────────── */
 
@@ -97,6 +100,15 @@ int main(void) {
     printf("  delete[]: OK\n\n");
 
     printf("All C++ features working!\n");
+
+    /* ── iostream demo ──────────────────────────────────────────── */
+    std::cout << "=== iostream demo ===\n";
+    std::cout << "cout int:    " << 42 << "\n";
+    std::cout << "cout float:  " << 3.14f << "\n";
+    std::cout << "cout bool:   " << true << "\n";
+    std::cout << "cout char:   " << 'X' << std::endl;
+    std::cerr << "cerr: this goes to stderr\n";
+
     printf("Press START to exit.\n");
 
     /* Simple event loop */
