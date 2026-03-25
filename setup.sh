@@ -27,8 +27,9 @@ else
 fi
 
 CC="${CROSS}gcc"
+CXX="${CROSS}g++"
 echo "Toolchain:  ${CROSS}"
-echo "Compiler:   $($CC --version | head -1)"
+echo "C compiler: $($CC --version | head -1)"
 
 # Check rv32imafc support
 if ! $CC -march=rv32imafc -mabi=ilp32f -x c -c /dev/null -o /dev/null 2>/dev/null; then
@@ -36,6 +37,13 @@ if ! $CC -march=rv32imafc -mabi=ilp32f -x c -c /dev/null -o /dev/null 2>/dev/nul
     exit 1
 fi
 echo "Target:     rv32imafc (ilp32f)"
+
+# Check C++ compiler
+if command -v "$CXX" &>/dev/null; then
+    echo "C++ compiler: $($CXX --version | head -1)"
+else
+    echo "WARNING:    ${CXX} not found -- C++ apps will not build"
+fi
 
 # Check for os.bin
 if [ -f os.bin ]; then

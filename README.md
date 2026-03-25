@@ -1,6 +1,6 @@
 # openfpgaOS SDK
 
-Build games for the [Analogue Pocket](https://www.analogue.co/pocket) in C.
+Build games for the [Analogue Pocket](https://www.analogue.co/pocket) in C or C++.
 
 **Hardware:** VexRiscv rv32imafc @ 100 MHz, 64 MB SDRAM, 320x240 video, 48 kHz stereo audio, 18-channel OPL3 FM synthesis + MIDI playback library.
 
@@ -91,6 +91,60 @@ The OS kernel provides a full C standard library via a jump table. No musl or ne
                       // strcat, strtok, memchr, strspn, strcspn, ...
 #include <math.h>     // sinf, cosf, sqrtf, powf, logf, atan2f, fabsf, ...
 #include <ctype.h>    // toupper, tolower, isalpha, isdigit, isspace, ...
+```
+
+### C++ support
+
+The SDK supports C++ (freestanding, no exceptions, no RTTI). Place `.cpp` files alongside `.c` files and they are compiled automatically.
+
+What works:
+- Classes, inheritance, virtual methods
+- `operator new` / `delete` (backed by the OS `malloc`/`free`)
+- Templates
+- Static constructors and destructors (`.init_array` / `.fini_array`)
+- All SDK headers are `extern "C"` compatible
+
+What is **not** available (freestanding environment):
+- Exceptions (`-fno-exceptions`)
+- RTTI / `dynamic_cast` (`-fno-rtti`)
+- The C++ Standard Library (`<vector>`, `<string>`, `<iostream>`, etc.)
+
+Example (`main.cpp`):
+
+```cpp
+#include "of.h"
+#include <stdio.h>
+
+class Game {
+    int score;
+public:
+    Game() : score(0) {}
+    void tick() {
+        of_input_poll();
+        if (of_btn_pressed(OF_BTN_A)) score++;
+    }
+    void draw() {
+        of_video_clear(0);
+        printf("Score: %d\n", score);
+        of_video_flip();
+    }
+};
+
+int main(void) {
+    of_video_init();
+    Game game;
+    while (1) {
+        game.tick();
+        game.draw();
+        of_delay_ms(16);
+    }
+}
+```
+
+You can add custom `CXXFLAGS` in your Makefile before including `sdk.mk`:
+
+```makefile
+CXXFLAGS = -std=c++17
 ```
 
 ### PC build

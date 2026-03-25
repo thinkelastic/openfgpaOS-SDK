@@ -27,6 +27,21 @@ SECTIONS {
         . = ALIGN(4);
     } > SDRAM
 
+    /* C++ static constructors / destructors */
+    .init_array : {
+        __init_array_start = .;
+        KEEP(*(SORT(.init_array.*)))
+        KEEP(*(.init_array))
+        __init_array_end = .;
+    } > SDRAM
+
+    .fini_array : {
+        __fini_array_start = .;
+        KEEP(*(SORT(.fini_array.*)))
+        KEEP(*(.fini_array))
+        __fini_array_end = .;
+    } > SDRAM
+
     .data : {
         *(.data*)
         *(.sdata*)
