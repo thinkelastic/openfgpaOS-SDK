@@ -21,6 +21,47 @@
 
 #include "of_libc.h"
 
+/* stdio.h defines printf-family names as macros that expand to
+ * "__OF_JT->name".  If stdio.h was included before this header those
+ * macros would corrupt member-access expressions like _jt()->snprintf(…).
+ * Save and remove every conflicting macro for our class bodies, then
+ * restore them so callers still see the macros after this header. */
+#ifdef snprintf
+#  pragma push_macro("snprintf")
+#  undef snprintf
+#  define _OF_IOSTREAM_RESTORE_SNPRINTF
+#endif
+#ifdef vsnprintf
+#  pragma push_macro("vsnprintf")
+#  undef vsnprintf
+#  define _OF_IOSTREAM_RESTORE_VSNPRINTF
+#endif
+#ifdef printf
+#  pragma push_macro("printf")
+#  undef printf
+#  define _OF_IOSTREAM_RESTORE_PRINTF
+#endif
+#ifdef fprintf
+#  pragma push_macro("fprintf")
+#  undef fprintf
+#  define _OF_IOSTREAM_RESTORE_FPRINTF
+#endif
+#ifdef sprintf
+#  pragma push_macro("sprintf")
+#  undef sprintf
+#  define _OF_IOSTREAM_RESTORE_SPRINTF
+#endif
+#ifdef vsprintf
+#  pragma push_macro("vsprintf")
+#  undef vsprintf
+#  define _OF_IOSTREAM_RESTORE_VSPRINTF
+#endif
+#ifdef sscanf
+#  pragma push_macro("sscanf")
+#  undef sscanf
+#  define _OF_IOSTREAM_RESTORE_SSCANF
+#endif
+
 namespace std {
 
 /* ── ostream ──────────────────────────────────────────────────────────── */
@@ -242,6 +283,36 @@ extern ostream cerr;
 extern istream cin;
 
 } /* namespace std */
+
+/* Restore any stdio.h macros that were saved above. */
+#ifdef _OF_IOSTREAM_RESTORE_SNPRINTF
+#  pragma pop_macro("snprintf")
+#  undef _OF_IOSTREAM_RESTORE_SNPRINTF
+#endif
+#ifdef _OF_IOSTREAM_RESTORE_VSNPRINTF
+#  pragma pop_macro("vsnprintf")
+#  undef _OF_IOSTREAM_RESTORE_VSNPRINTF
+#endif
+#ifdef _OF_IOSTREAM_RESTORE_PRINTF
+#  pragma pop_macro("printf")
+#  undef _OF_IOSTREAM_RESTORE_PRINTF
+#endif
+#ifdef _OF_IOSTREAM_RESTORE_FPRINTF
+#  pragma pop_macro("fprintf")
+#  undef _OF_IOSTREAM_RESTORE_FPRINTF
+#endif
+#ifdef _OF_IOSTREAM_RESTORE_SPRINTF
+#  pragma pop_macro("sprintf")
+#  undef _OF_IOSTREAM_RESTORE_SPRINTF
+#endif
+#ifdef _OF_IOSTREAM_RESTORE_VSPRINTF
+#  pragma pop_macro("vsprintf")
+#  undef _OF_IOSTREAM_RESTORE_VSPRINTF
+#endif
+#ifdef _OF_IOSTREAM_RESTORE_SSCANF
+#  pragma pop_macro("sscanf")
+#  undef _OF_IOSTREAM_RESTORE_SSCANF
+#endif
 
 #endif /* OF_PC */
 #endif /* _OF_IOSTREAM_H */
