@@ -23,7 +23,9 @@ typedef void FILE;
 
 #define stdout (__OF_JT->stdout_ptr)
 #define stderr (__OF_JT->stderr_ptr)
+#ifndef NULL
 #define NULL   ((void *)0)
+#endif
 #define EOF    (-1)
 
 #define SEEK_SET 0

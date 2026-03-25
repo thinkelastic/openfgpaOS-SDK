@@ -56,7 +56,9 @@ static inline unsigned long long strtoull(const char *s, char **e, int b) { retu
 
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
+#ifndef NULL
 #define NULL ((void *)0)
+#endif
 #define RAND_MAX 2147483647
 
 /* exit/abort use SYS_exit (93) directly to avoid conflicts with of.h's
