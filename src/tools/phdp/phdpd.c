@@ -102,6 +102,7 @@ static struct {
     /* Active stream */
     stream_state_t stream;
     bool           streaming_active;
+    int            monitoring_flush_pending;
 
     /* Log ring */
     log_ring_t  log_ring;
@@ -593,6 +594,8 @@ static void handle_exec_start(const uint8_t *payload, uint32_t len) {
 
     logv("[pocket] EXEC_START entry=0x%08X\n", entry);
     stream_abort(); /* clean up if anything lingering */
+    G.monitoring_flush_pending = 1;  /* flush RX buffer after uart_process_rx returns */
+
     set_state(PHDP_STATE_MONITORING);
 
     /* Notify any IPC clients waiting for exec */
@@ -640,7 +643,10 @@ static void uart_process_rx(void) {
             offset++;
 
         if (offset > 0) {
-            /* Discard bytes before STX */
+            /* Non-PHDP bytes before STX — treat as raw console output */
+            logv("[console] %u bytes: %.*s\n", offset, (int)(offset > 60 ? 60 : offset), (const char *)G.uart_rx);
+            log_ring_write((const char *)G.uart_rx, offset);
+            log_ring_broadcast((const char *)G.uart_rx, offset);
             G.uart_rx_len -= offset;
             memmove(G.uart_rx, G.uart_rx + offset, G.uart_rx_len);
         }
@@ -681,6 +687,21 @@ static void uart_process_rx(void) {
             memmove(G.uart_rx, G.uart_rx + 1, G.uart_rx_len);
         }
     }
+
+    /* Flush any remaining non-PHDP bytes as console output.
+     * In MONITORING state, the OS sends raw ASCII without PHDP framing. */
+    if (G.uart_rx_len > 0 && G.state == PHDP_STATE_MONITORING) {
+        /* Check if there's no STX in the remaining data */
+        uint32_t i;
+        for (i = 0; i < G.uart_rx_len; i++)
+            if (G.uart_rx[i] == PHDP_STX) break;
+        if (i == G.uart_rx_len) {
+            /* All remaining bytes are console output */
+            log_ring_write((const char *)G.uart_rx, G.uart_rx_len);
+            log_ring_broadcast((const char *)G.uart_rx, G.uart_rx_len);
+            G.uart_rx_len = 0;
+        }
+    }
 }
 
 static int uart_read_available(void) {
@@ -696,6 +717,8 @@ static int uart_read_available(void) {
     }
 
     ssize_t n = read(G.uart_fd, G.uart_rx + G.uart_rx_len, space);
+    if (n > 0 && G.state == PHDP_STATE_MONITORING)
+        logv("[uart-mon] read %zd bytes\n", n);
     if (n < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
             return 0;
@@ -705,7 +728,41 @@ static int uart_read_available(void) {
     if (n == 0) return 0;
 
     G.uart_rx_len += (uint32_t)n;
-    uart_process_rx();
+
+    /* In MONITORING state, treat bytes as raw console output unless
+     * we see STX (0x02) which means the Pocket rebooted and is sending
+     * EVT_BOOT_ALIVE — switch back to PHDP parsing. */
+    if (G.state == PHDP_STATE_MONITORING) {
+        /* In raw console mode: only the NEW bytes are console output.
+         * Check only the new bytes for STX (Pocket reboot indicator). */
+        const uint8_t *new_data = G.uart_rx + G.uart_rx_len - (uint32_t)n;
+        int has_stx = 0;
+        for (ssize_t i = 0; i < n; i++)
+            if (new_data[i] == PHDP_STX) { has_stx = 1; break; }
+
+        if (has_stx) {
+            /* Reboot detected — flush buffer and switch to PHDP parsing */
+            G.uart_rx_len = 0;
+            /* Re-add only the new data for PHDP parsing */
+            memcpy(G.uart_rx, new_data, (size_t)n);
+            G.uart_rx_len = (uint32_t)n;
+            set_state(PHDP_STATE_LISTENING);
+            uart_process_rx();
+        } else {
+            /* Raw console output */
+            logv("[console] %zd bytes: %.*s\n", n, (int)(n > 60 ? 60 : n), (const char *)new_data);
+            log_ring_write((const char *)new_data, (uint32_t)n);
+            log_ring_broadcast((const char *)new_data, (uint32_t)n);
+            G.uart_rx_len = 0;  /* consume everything */
+        }
+    } else {
+        uart_process_rx();
+        /* After EXEC_START processing, flush leftover RX buffer */
+        if (G.monitoring_flush_pending && G.state == PHDP_STATE_MONITORING) {
+            G.uart_rx_len = 0;
+            G.monitoring_flush_pending = 0;
+        }
+    }
     return 0;
 }
 
