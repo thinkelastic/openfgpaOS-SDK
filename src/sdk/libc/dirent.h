@@ -6,6 +6,10 @@
 #include_next <dirent.h>
 #else
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 
 struct dirent {
@@ -30,6 +34,10 @@ static inline int closedir(DIR *dirp) {
     (void)dirp;
     return -1;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* OF_PC */
 #endif /* _OF_DIRENT_H */
