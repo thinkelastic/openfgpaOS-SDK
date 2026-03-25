@@ -87,7 +87,7 @@ void __cxa_guard_abort(long long *guard) {
 
 /* ── operator new / delete ────────────────────────────────────── */
 
-typedef unsigned int size_t;
+typedef __SIZE_TYPE__ size_t;
 
 void *operator new(size_t size)              { return cxx_malloc(size); }
 void *operator new[](size_t size)            { return cxx_malloc(size); }
