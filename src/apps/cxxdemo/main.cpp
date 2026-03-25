@@ -55,20 +55,11 @@ T max_of(T a, T b) {
     return (a > b) ? a : b;
 }
 
-/* ── Drawing helpers ──────────────────────────────────────────── */
-
-static void draw_text(int x, int y, const char *text, uint8_t color) {
-    (void)x; (void)y; (void)color;
-    /* Use terminal output for text */
-    printf("%s", text);
-}
-
 /* ── Main ─────────────────────────────────────────────────────── */
 
 int main(void) {
     of_video_init();
-    of_terminal_init();
-    of_terminal_clear();
+    of_print_clear();
 
     printf("=== openfpgaOS C++ Demo ===\n\n");
 
