@@ -103,11 +103,34 @@ What works:
 - Templates
 - Static constructors and destructors (`.init_array` / `.fini_array`)
 - All SDK headers are `extern "C"` compatible
+- `<iostream>` — `std::cout`, `std::cerr`, `std::cin` (lightweight, jump-table backed)
 
 What is **not** available (freestanding environment):
 - Exceptions (`-fno-exceptions`)
 - RTTI / `dynamic_cast` (`-fno-rtti`)
-- The C++ Standard Library (`<vector>`, `<string>`, `<iostream>`, etc.)
+- The rest of the C++ Standard Library (`<vector>`, `<string>`, `<algorithm>`, etc.)
+
+#### `<iostream>` — cout / cerr / cin
+
+```cpp
+#include <iostream>
+
+int main(void) {
+    std::cout << "Hello from cout!\n";
+    std::cout << "int=" << 42 << " float=" << 3.14f << std::endl;
+    std::cerr << "error message\n";
+
+    int n;
+    std::cin >> n;                         // reads from fd 0 (stdin / serial)
+    std::cout << "you entered: " << n << "\n";
+}
+```
+
+`std::cout` and `std::cerr` write through `write(1, …)` / `write(2, …)` via the OS jump table — identical to calling `printf`. `std::cin` reads from fd 0 character-by-character; on the Analogue Pocket there is no keyboard, so `cin` is mainly useful when stdin is connected to a serial port or redirected by the host OS.
+
+Supported `operator<<` types: `bool`, `char`, `unsigned char`, `const char*`, `short`, `unsigned short`, `int`, `unsigned int`, `long`, `unsigned long`, `long long`, `unsigned long long`, `float`, `double`, `void*`.
+
+Supported `operator>>` types: `char`, `char*` (one word), `int`, `unsigned int`, `long`, `unsigned long`, `float`, `double`, `bool`.
 
 Example (`main.cpp`):
 

@@ -95,3 +95,13 @@ void  operator delete(void *ptr) noexcept    { cxx_free(ptr); }
 void  operator delete[](void *ptr) noexcept  { cxx_free(ptr); }
 void  operator delete(void *ptr, size_t) noexcept   { cxx_free(ptr); }
 void  operator delete[](void *ptr, size_t) noexcept  { cxx_free(ptr); }
+
+/* ── iostream global stream objects ──────────────────────────────────── */
+
+#include <iostream>
+
+namespace std {
+    ostream cout(1);   /* stdout (fd 1) */
+    ostream cerr(2);   /* stderr (fd 2) */
+    istream cin;       /* stdin  (fd 0) */
+}
