@@ -6,6 +6,10 @@
 #include_next <sys/stat.h>
 #else
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 
 typedef uint32_t mode_t;
@@ -42,6 +46,10 @@ static inline int fstat(int fd, struct stat *buf) {
     (void)fd; (void)buf;
     return -1;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* OF_PC */
 #endif /* _OF_SYS_STAT_H */

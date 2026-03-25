@@ -11,6 +11,10 @@
 #include_next <stdio.h>
 #else
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "of_libc.h"
 
 typedef void FILE;
@@ -84,6 +88,10 @@ static inline int puts(const char *s) {
 #define sprintf   __OF_JT->sprintf
 #define vsprintf  __OF_JT->vsprintf
 #define sscanf    __OF_JT->sscanf
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* OF_PC */
 #endif /* _OF_STDIO_H */

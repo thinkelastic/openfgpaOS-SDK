@@ -21,6 +21,10 @@
 #ifndef OF_BRAM_H
 #define OF_BRAM_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Place a function in BRAM. noinline prevents the compiler from inlining
  * the function body into callers (which would copy it back to SDRAM). */
 #define OF_FASTTEXT   __attribute__((section(".app_fasttext"), noinline))
@@ -36,5 +40,9 @@
 #define OF_APP_BRAM_BASE   0x00002000
 #define OF_APP_BRAM_END    0x0000FE00
 #define OF_APP_BRAM_SIZE   (OF_APP_BRAM_END - OF_APP_BRAM_BASE)  /* ~55KB */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* OF_BRAM_H */

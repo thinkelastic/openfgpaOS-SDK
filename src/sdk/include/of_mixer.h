@@ -8,6 +8,10 @@
 #ifndef OF_MIXER_H
 #define OF_MIXER_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 
 #ifndef OF_PC
@@ -65,5 +69,9 @@ static inline void of_mixer_pump(void) {}
 static inline int of_mixer_voice_active(int voice) { (void)voice; return 0; }
 
 #endif /* OF_PC */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* OF_MIXER_H */

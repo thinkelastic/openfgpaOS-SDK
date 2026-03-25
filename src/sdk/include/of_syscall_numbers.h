@@ -8,6 +8,10 @@
 #ifndef OF_SYSCALL_NUMBERS_H
 #define OF_SYSCALL_NUMBERS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ======================================================================
  * Canonical syscall numbers (OF_SYS_* prefix)
  * ====================================================================== */
@@ -121,5 +125,9 @@
 /* LZW Compression */
 #define OF_SYS_LZW_COMPRESS            0x10E0
 #define OF_SYS_LZW_UNCOMPRESS          0x10E1
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* OF_SYSCALL_NUMBERS_H */
