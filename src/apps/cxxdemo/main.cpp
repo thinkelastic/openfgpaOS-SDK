@@ -61,8 +61,8 @@ T max_of(T a, T b) {
 /* ── Main ─────────────────────────────────────────────────────── */
 
 int main(void) {
-    of_video_init();
-    of_print_clear();
+    //of_video_init();
+    //of_print_clear();
 
     printf("=== openfpgaOS C++ Demo ===\n\n");
 
