@@ -15,6 +15,10 @@
 #ifndef OF_FILE_H
 #define OF_FILE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 
 #define OF_PATH_SLOT_PREFIX  "slot:"
@@ -80,5 +84,9 @@ static inline void of_set_idle_hook(void (*hook)(void)) {
 }
 
 #endif /* OF_PC */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* OF_FILE_H */

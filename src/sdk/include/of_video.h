@@ -7,6 +7,10 @@
 #ifndef OF_VIDEO_H
 #define OF_VIDEO_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 
 /* Screen constants */
@@ -198,5 +202,9 @@ static inline void of_fill_rect(int x, int y, int w, int h, uint8_t color) {
         }
     }
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* OF_VIDEO_H */

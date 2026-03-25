@@ -5,6 +5,10 @@
 #ifndef OF_TIMER_H
 #define OF_TIMER_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 
 #define OF_CPU_HZ       100000000
@@ -38,5 +42,9 @@ void     of_delay_us(uint32_t us);
 void     of_delay_ms(uint32_t ms);
 
 #endif /* OF_PC */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* OF_TIMER_H */

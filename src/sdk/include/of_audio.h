@@ -7,6 +7,10 @@
 #ifndef OF_AUDIO_H
 #define OF_AUDIO_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 
 #define OF_AUDIO_RATE   48000
@@ -62,5 +66,9 @@ static inline int of_audio_enqueue(const int16_t *s, int c) { (void)s; (void)c; 
 static inline int of_audio_ring_free(void) { return 0; }
 
 #endif /* OF_PC */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* OF_AUDIO_H */
