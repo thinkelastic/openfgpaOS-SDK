@@ -1,0 +1,77 @@
+/* compat/cmath — C++ math function wrappers for openfpgaOS / VexRiscV RV32IMF
+ * When OF_PC is defined (native PC build) this header simply includes the
+ * real <cmath> from the system so that correctness tests work on the host.
+ *
+ * The VexRiscV target (rv32imafc, ABI ilp32f) has hardware support only for
+ * single-precision (float) FP.  Double-precision operations are emulated in
+ * software via libgcc and are therefore very slow.
+ *
+ * The SDK's math.h (in libc/) provides float math through the OS jump table:
+ *   sqrtf, sinf, cosf, tanf, fabsf, fminf, fmaxf, powf, logf, expf, …
+ * Only sin(double), cos(double), sqrt(double) have double versions.
+ *
+ * This header puts all commonly-used math names in namespace std and routes:
+ *   - float overloads  → SDK single-precision hardware-accelerated functions
+ *   - double overloads → float cast + SDK function (soft-float fallback)
+ *
+ * The raytracing code has been ported to use float throughout, so the double
+ * fallbacks exist only for any residual double literals in library code.
+ */
+#ifndef _OF_COMPAT_CMATH_H
+#define _OF_COMPAT_CMATH_H
+
+#ifdef OF_PC
+/* Native PC build: use the real C++ standard library. */
+#include <cmath>
+#else /* embedded VexRiscV build */
+
+#include <math.h>  /* SDK math.h: sqrtf, sinf, cosf, tanf, fabsf, … */
+
+namespace std {
+
+/* ── Single-precision (hardware-accelerated on RV32F) ──────────────────── */
+
+inline float sqrt (float x)             { return sqrtf(x); }
+inline float fabs (float x)             { return fabsf(x); }
+inline float fmin (float a, float b)    { return fminf(a, b); }
+inline float fmax (float a, float b)    { return fmaxf(a, b); }
+inline float sin  (float x)             { return sinf(x); }
+inline float cos  (float x)             { return cosf(x); }
+inline float tan  (float x)             { return tanf(x); }
+inline float pow  (float b, float e)    { return powf(b, e); }
+inline float pow  (float b, int   n)    { return powf(b, (float)n); }
+inline float log  (float x)             { return logf(x); }
+inline float log2 (float x)             { return log2f(x); }
+inline float exp  (float x)             { return expf(x); }
+inline float floor(float x)             { return floorf(x); }
+inline float ceil (float x)             { return ceilf(x); }
+inline float round(float x)             { return roundf(x); }
+inline float atan2(float y, float x)    { return atan2f(y, x); }
+inline float asin (float x)             { return asinf(x); }
+inline float acos (float x)             { return acosf(x); }
+inline float fmod (float x, float y)    { return fmodf(x, y); }
+
+/* ── Double fallbacks (soft-float on RV32IMF — use sparingly) ──────────── */
+/* Precision limited to ~7 significant digits (float range).               */
+
+inline double sqrt (double x)            { return (double)sqrtf((float)x); }
+inline double fabs (double x)            { return (double)fabsf((float)x); }
+inline double fmin (double a, double b)  { return (double)fminf((float)a, (float)b); }
+inline double fmax (double a, double b)  { return (double)fmaxf((float)a, (float)b); }
+inline double sin  (double x)            { return (double)sinf((float)x); }
+inline double cos  (double x)            { return (double)cosf((float)x); }
+inline double tan  (double x)            { return (double)tanf((float)x); }
+inline double pow  (double b, double e)  { return (double)powf((float)b, (float)e); }
+inline double pow  (double b, int    n)  { return (double)powf((float)b, (float)n); }
+inline double log  (double x)            { return (double)logf((float)x); }
+inline double exp  (double x)            { return (double)expf((float)x); }
+inline double floor(double x)            { return (double)floorf((float)x); }
+inline double ceil (double x)            { return (double)ceilf((float)x); }
+inline double atan2(double y, double x)  { return (double)atan2f((float)y, (float)x); }
+inline double asin (double x)            { return (double)asinf((float)x); }
+inline double acos (double x)            { return (double)acosf((float)x); }
+
+} /* namespace std */
+
+#endif /* OF_PC */
+#endif /* _OF_COMPAT_CMATH_H */
