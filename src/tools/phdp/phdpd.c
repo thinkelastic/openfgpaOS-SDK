@@ -211,11 +211,12 @@ static void log_ring_write(const char *data, uint32_t len) {
  * If max_lines == 0, return the entire ring contents.
  * Returns a malloc'd string the caller must free.
  */
-static char *log_ring_read(uint32_t max_lines) {
+/* Read from the log ring. Returns malloc'd buffer and sets *out_len.
+ * If max_lines > 0, returns only the last N lines. */
+static char *log_ring_read(uint32_t max_lines, uint32_t *out_len) {
     if (G.log_ring.len == 0) {
-        char *s = malloc(1);
-        s[0] = '\0';
-        return s;
+        if (out_len) *out_len = 0;
+        return NULL;
     }
 
     /* Determine start position of the ring data */
@@ -226,12 +227,14 @@ static char *log_ring_read(uint32_t max_lines) {
         start = G.log_ring.head;  /* oldest byte is at head (wrapped) */
 
     /* Linearize the ring into a temporary buffer */
-    char *linear = malloc(G.log_ring.len + 1);
+    char *linear = malloc(G.log_ring.len);
     for (uint32_t i = 0; i < G.log_ring.len; i++)
         linear[i] = G.log_ring.buf[(start + i) % PHDP_LOG_RING_SIZE];
-    linear[G.log_ring.len] = '\0';
 
-    if (max_lines == 0) return linear;
+    if (max_lines == 0) {
+        if (out_len) *out_len = G.log_ring.len;
+        return linear;
+    }
 
     /* Find the last max_lines newlines */
     uint32_t count = 0;
@@ -242,8 +245,11 @@ static char *log_ring_read(uint32_t max_lines) {
     }
     pos++;  /* points to start of the desired region */
 
-    char *result = strdup(linear + pos);
+    uint32_t result_len = G.log_ring.len - (uint32_t)pos;
+    char *result = malloc(result_len);
+    memcpy(result, linear + pos, result_len);
     free(linear);
+    if (out_len) *out_len = result_len;
     return result;
 }
 
@@ -849,23 +855,23 @@ static void ipc_handle_logs(int client_idx, const phdp_ipc_req_t *req) {
 
     if (line_count == 0) {
         /* Continuous streaming — first dump existing logs, then mark for streaming */
-        char *existing = log_ring_read(0);
-        if (existing) {
-            size_t elen = strlen(existing);
-            if (elen > 0)
-                (void)write(G.clients[client_idx].fd, existing, elen);
+        uint32_t elen = 0;
+        char *existing = log_ring_read(0, &elen);
+        if (existing && elen > 0) {
+            (void)write(G.clients[client_idx].fd, existing, elen);
             free(existing);
         }
         G.clients[client_idx].stream_logs = true;
     } else {
-        /* Return last N lines and done */
-        char *lines = log_ring_read(line_count);
-        if (lines) {
-            size_t llen = strlen(lines);
-            if (llen > 0)
-                (void)write(G.clients[client_idx].fd, lines, llen);
-            free(lines);
-        }
+        /* Return last N lines and close — client reads until EOF */
+        uint32_t llen = 0;
+        char *lines = log_ring_read(line_count, &llen);
+        if (lines && llen > 0)
+            (void)write(G.clients[client_idx].fd, lines, llen);
+        free(lines);
+        close(G.clients[client_idx].fd);
+        G.clients[client_idx] = G.clients[G.num_clients - 1];
+        G.num_clients--;
     }
 }
 
