@@ -1,11 +1,12 @@
 # openfpgaOS SDK Makefile
 #
 # Usage:
-#   make              Build mi_app, create release/
-#   make deploy       Copy release/ to Pocket SD card
-#   make clean        Remove all build artifacts
-#   make core         Build a standalone game core (interactive)
-#   make package      Package game core into a ZIP
+#   make                  Build mi_app, create release/
+#   make deploy           Copy release/ to Pocket SD card
+#   make clean            Remove all build artifacts
+#   make core             Build a standalone game core (interactive)
+#   make package          Package full SDK release into a ZIP
+#   make package-mi_app   Package only mi_app into a ZIP
 
 # ── Paths ────────────────────────────────────────────────────────
 CORE_ID      = ThinkElastic.openfpgaOS
@@ -42,8 +43,8 @@ release: mi_app
 	@[ -f src/mi_app/app.elf ] && cp src/mi_app/app.elf $(REL_ASSETS)/mi_app.elf || true
 	@find src/mi_app -maxdepth 1 \( -name "*.mid" -o -name "*.wav" -o -name "*.dat" -o -name "*.png" \) \
 		-exec cp {} "$(REL_ASSETS)/" \; 2>/dev/null || true
-	@# Instance JSONs
-	@[ -d dist/sdk/instances ] && cp dist/sdk/instances/*.json $(REL_INSTANCE)/ 2>/dev/null || true
+	@# Instance JSON — only mi_app
+	@[ -f dist/sdk/instances/mi_app.json ] && cp dist/sdk/instances/mi_app.json $(REL_INSTANCE)/ || true
 	@echo "Release ready: $(RELEASE)/"
 
 # ── Deploy to SD card ────────────────────────────────────────────
@@ -62,4 +63,7 @@ core:
 package:
 	./package.sh
 
-.PHONY: all mi_app release deploy clean core package
+package-mi_app:
+	./package_mi_app.sh
+
+.PHONY: all mi_app release deploy clean core package package-mi_app
