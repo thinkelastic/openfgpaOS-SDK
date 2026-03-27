@@ -2,10 +2,11 @@
 #
 # openfpgaOS SDK — mi_app Packager
 #
-# Assembles and packages only mi_app into a distributable ZIP that can be
-# extracted directly to an Analogue Pocket SD card.
+# Builds the release (make release → build/sdk/) and packages it into a
+# distributable ZIP that can be extracted directly to an Analogue Pocket
+# SD card.
 #
-# The ZIP contains the full structure required by the Pocket firmware:
+# build/sdk/ already contains only the mi_app artefacts:
 #   Cores/ThinkElastic.openfpgaOS/   — bitstream, loader, JSON configs
 #   Assets/openfpgaos/common/        — os.bin + mi_app.elf (+ any data files)
 #   Assets/openfpgaos/ThinkElastic.openfpgaOS/ — mi_app instance JSON only
@@ -22,89 +23,58 @@ CYAN='\033[96m'
 RESET='\033[0m'
 
 SDK_DIR="$(cd "$(dirname "$0")" && pwd)"
-RUNTIME="$SDK_DIR/runtime"
 DIST="$SDK_DIR/dist/sdk"
-SRC_APP="$SDK_DIR/src/mi_app"
 
-CORE_ID="ThinkElastic.openfpgaOS"
-PLATFORM="openfpgaos"
-
-BUILD="$SDK_DIR/build/mi_app"
+BUILD="$SDK_DIR/build/sdk"
 RELEASES="$SDK_DIR/releases"
 
-APP_ELF="$SRC_APP/app.elf"
-INSTANCE_JSON="$DIST/instances/mi_app.json"
+# ── Build / refresh build/sdk/ ────────────────────────────────────
+echo -e "${CYAN}=== mi_app Packager ===${RESET}"
+echo "  Building release..."
+make -C "$SDK_DIR" release
 
-# ── Read version from core.json ───────────────────────────────────
+# ── Verify build/sdk/ is ready ───────────────────────────────────
+if [ ! -d "$BUILD/Cores" ]; then
+    echo "Error: build/sdk/ not found after make release."
+    exit 1
+fi
+
+# ── Read metadata from the assembled core.json ───────────────────
+CORE_NAME=$(ls "$BUILD/Cores/" 2>/dev/null | head -1)
+if [ -z "$CORE_NAME" ]; then
+    echo "Error: no core found in build/sdk/Cores/. Run 'make release' first."
+    exit 1
+fi
+
+CORE_JSON="$BUILD/Cores/$CORE_NAME/core.json"
+if [ ! -f "$CORE_JSON" ]; then
+    echo "Error: $CORE_JSON not found."
+    exit 1
+fi
+
+GAME_NAME=$(python3 -c "
+import json, sys
+with open('$CORE_JSON') as f:
+    d = json.load(f)
+print(d['core']['metadata']['description'])
+" 2>/dev/null)
+[ -z "$GAME_NAME" ] && { echo "Warning: could not read description from $CORE_JSON, using 'mi_app'"; GAME_NAME="mi_app"; }
+
 CORE_VERSION=$(python3 -c "
-import json
-with open('$DIST/core/core.json') as f:
+import json, sys
+with open('$CORE_JSON') as f:
     d = json.load(f)
 print(d['core']['metadata']['version'])
-" 2>/dev/null || echo "1.0.0")
+" 2>/dev/null)
+[ -z "$CORE_VERSION" ] && { echo "Warning: could not read version from $CORE_JSON, using '1.0.0'"; CORE_VERSION="1.0.0"; }
 
 OUTPUT_ZIP="$RELEASES/mi_app-v${CORE_VERSION}.zip"
 
-echo -e "${CYAN}=== mi_app Packager ===${RESET}"
 echo "  Version : $CORE_VERSION"
 echo "  Output  : $OUTPUT_ZIP"
 echo
 
-# ── Check required source files ───────────────────────────────────
-check_file() {
-    if [ -f "$1" ]; then
-        echo "  ✓ $1"
-    else
-        echo "  ✗ $1 — not found"
-        echo
-        echo "Error: missing required file. Run 'make' first."
-        exit 1
-    fi
-}
-
-check_file "$APP_ELF"
-check_file "$INSTANCE_JSON"
-check_file "$RUNTIME/bitstream.rbf_r"
-check_file "$RUNTIME/loader.bin"
-check_file "$RUNTIME/os.bin"
-echo
-
-# ── Assemble build/mi_app/ directory structure ────────────────────
-REL_CORE="$BUILD/Cores/$CORE_ID"
-REL_ASSETS="$BUILD/Assets/$PLATFORM/common"
-REL_INSTANCE="$BUILD/Assets/$PLATFORM/$CORE_ID"
-REL_PLATFORM="$BUILD/Platforms"
-
-rm -rf "$BUILD"
-mkdir -p "$REL_CORE" "$REL_ASSETS" "$REL_INSTANCE" "$REL_PLATFORM/_images"
-
-# Bitstream + loader
-cp "$RUNTIME/bitstream.rbf_r" "$REL_CORE/"
-cp "$RUNTIME/loader.bin"       "$REL_CORE/"
-
-# Core JSON configs + icon
-[ -d "$DIST/core" ] && cp "$DIST/core/"*.json "$DIST/core/"*.bin "$REL_CORE/" 2>/dev/null || true
-
-# Platform files
-[ -d "$DIST/platform" ] && cp "$DIST/platform/"*.json "$REL_PLATFORM/" 2>/dev/null || true
-[ -d "$DIST/platform/_images" ] && cp "$DIST/platform/_images/"*.bin "$REL_PLATFORM/_images/" 2>/dev/null || true
-
-# OS binary
-cp "$RUNTIME/os.bin" "$REL_ASSETS/"
-
-# mi_app ELF
-cp "$APP_ELF" "$REL_ASSETS/mi_app.elf"
-
-# Optional data files bundled with mi_app (.mid, .wav, .dat, .png)
-find "$SRC_APP" -maxdepth 1 \
-    \( -name "*.mid" -o -name "*.wav" -o -name "*.dat" -o -name "*.png" \) \
-    -exec cp {} "$REL_ASSETS/" \; 2>/dev/null || true
-
-# Instance JSON — mi_app only
-cp "$INSTANCE_JSON" "$REL_INSTANCE/"
-
-# ── Generate INSTALL.txt ──────────────────────────────────────────
-GAME_NAME="mi_app"
+# ── Generate INSTALL.txt inside build/sdk/ ───────────────────────
 cat > "$BUILD/INSTALL.txt" << EOF
 $GAME_NAME
 $(printf '=%.0s' $(seq 1 ${#GAME_NAME}))
@@ -119,7 +89,7 @@ Installation:
 Save files are created automatically on first use.
 EOF
 
-# ── Create ZIP ────────────────────────────────────────────────────
+# ── Create ZIP from build/sdk/ ────────────────────────────────────
 mkdir -p "$RELEASES"
 rm -f "$OUTPUT_ZIP" 2>/dev/null || true
 
