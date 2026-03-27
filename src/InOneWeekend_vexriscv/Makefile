@@ -5,13 +5,10 @@
 #
 # ── Quick start ───────────────────────────────────────────────────────────
 #
-#   # Step 1: set SDK_DIR to where openfgpaOS-SDK is checked out
-#   export SDK_DIR=/path/to/openfgpaOS-SDK/src/sdk
+#   # Step 1: build for VexRiscV (from the SDK root):
+#   make APP=InOneWeekend_vexriscv
 #
-#   # Step 2: build for VexRiscV
-#   make
-#
-#   # Step 3: build native PC version for correctness testing
+#   # Step 2: build native PC version for correctness testing
 #   make app_pc
 #   ./app_pc > out.ppm
 #   # View out.ppm with any PPM viewer (e.g. GIMP, feh, display)
@@ -24,11 +21,8 @@
 #   The camera defaults to 160×90 with 4 samples.  Edit main.cpp to change.
 # ─────────────────────────────────────────────────────────────────────────
 
-# Path to the openfpgaOS SDK (override on command line or via $SDK_DIR)
-# Default assumes the two repos are siblings:
-#   <parent>/openfgpaOS-SDK/src/sdk
-#   <parent>/raytracing.github.io/src/InOneWeekend_vexriscv
-SDK_DIR ?= ../../../../openfgpaOS-SDK/src/sdk
+# Path to the openfpgaOS SDK — relative to this directory inside the repo
+SDK_DIR = ../sdk
 
 # C++ source files (only one translation unit; all code is in headers)
 SRCS_CXX := main.cpp
@@ -37,6 +31,13 @@ SRCS_CXX := main.cpp
 CXXFLAGS += -I.
 
 include $(SDK_DIR)/sdk.mk
+
+# Explicit CRT build rule (pattern rule does not cross directories)
+$(CRT_DIR)/start.o: $(CRT_DIR)/start.S
+	$(AS) $(ASFLAGS) -c -o $@ $<
+
+all: app.elf
+	$(SIZE) $<
 
 # ── PC / host build ───────────────────────────────────────────────────────
 # Uses the system compiler; OF_PC makes each SDK compat header include_next
@@ -48,9 +49,11 @@ app_pc: main.cpp
 	$(PC_CC) -DOF_PC -I. -O2 -Wall -Wextra -std=c++14 \
 	    $(CXXFLAGS) main.cpp -lm -o $(PC_OUT)
 
-.PHONY: app_pc clean-pc
+.PHONY: all app_pc clean-pc clean
 
 clean-pc:
 	rm -f $(PC_OUT)
 
 sdk-clean: clean-pc
+
+clean: sdk-clean
