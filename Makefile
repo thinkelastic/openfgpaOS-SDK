@@ -1,11 +1,17 @@
 # openfpgaOS SDK Makefile
 #
 # Usage:
-#   make              Build all apps, create release/
-#   make deploy       Copy release/ to Pocket SD card
-#   make clean        Remove all build artifacts
-#   make core         Build a standalone game core (interactive)
-#   make package      Package game core into a ZIP
+#   make                       Build app (default: mi_app), create release/
+#   make APP=myapp             Build a different app from src/myapp/
+#   make deploy                Copy release/ to Pocket SD card
+#   make clean                 Remove all build artifacts
+#   make core                  Build a standalone game core (interactive)
+#   make package               Package full SDK release into a ZIP
+#   make package-app           Package only the current APP into a ZIP
+#   make package-app APP=myapp Package a specific app into a ZIP
+
+# ── App name (override on command line: make APP=myapp) ──────────
+APP ?= mi_app
 
 # ── Paths ────────────────────────────────────────────────────────
 CORE_ID      = ThinkElastic.openfpgaOS
@@ -18,15 +24,15 @@ REL_PLATFORM = $(RELEASE)/Platforms
 RUNTIME      = runtime
 
 # ── Default target ───────────────────────────────────────────────
-all: apps release
+all: app release
 
-# ── Build all bundled apps ───────────────────────────────────────
-apps:
-	$(MAKE) -C src/apps
+# ── Build app ────────────────────────────────────────────────────
+app:
+	$(MAKE) -C src/$(APP)
 
 # ── Create release/ directory ────────────────────────────────────
-release: apps
-	@echo "Creating release/..."
+release: app
+	@echo "Creating release (APP=$(APP))..."
 	@mkdir -p $(REL_CORE) $(REL_ASSETS) $(REL_INSTANCE) $(REL_PLATFORM)/_images
 	@# Core: bitstream + loader
 	@cp $(RUNTIME)/bitstream.rbf_r $(REL_CORE)/
@@ -38,15 +44,12 @@ release: apps
 	@[ -d dist/sdk/platform/_images ] && cp dist/sdk/platform/_images/*.bin $(REL_PLATFORM)/_images/ 2>/dev/null || true
 	@# OS binary
 	@cp $(RUNTIME)/os.bin $(REL_ASSETS)/
-	@# Bundled apps + data files
-	@for d in src/apps/*/; do \
-		name=$$(basename "$$d"); \
-		[ -f "$$d/app.elf" ] && cp "$$d/app.elf" "$(REL_ASSETS)/$$name.elf" || true; \
-		find "$$d" -maxdepth 1 \( -name "*.mid" -o -name "*.wav" -o -name "*.dat" -o -name "*.png" \) \
-			-exec cp {} "$(REL_ASSETS)/" \; 2>/dev/null || true; \
-	done
-	@# Instance JSONs
-	@[ -d dist/sdk/instances ] && cp dist/sdk/instances/*.json $(REL_INSTANCE)/ 2>/dev/null || true
+	@# App ELF + data files
+	@[ -f src/$(APP)/app.elf ] && cp src/$(APP)/app.elf $(REL_ASSETS)/$(APP).elf || true
+	@find src/$(APP) -maxdepth 1 \( -name "*.mid" -o -name "*.wav" -o -name "*.dat" -o -name "*.png" \) \
+		-exec cp {} "$(REL_ASSETS)/" \; 2>/dev/null || true
+	@# Instance JSON — only the named app
+	@[ -f dist/sdk/instances/$(APP).json ] && cp dist/sdk/instances/$(APP).json $(REL_INSTANCE)/ || true
 	@echo "Release ready: $(RELEASE)/"
 
 # ── Deploy to SD card ────────────────────────────────────────────
@@ -55,7 +58,7 @@ deploy: release
 
 # ── Clean ────────────────────────────────────────────────────────
 clean:
-	$(MAKE) -C src/apps clean
+	$(MAKE) -C src/$(APP) clean
 	rm -rf build releases
 
 # ── Core packaging ───────────────────────────────────────────────
@@ -65,4 +68,7 @@ core:
 package:
 	./package.sh
 
-.PHONY: all apps release deploy clean core package
+package-app:
+	./package_app.sh $(APP)
+
+.PHONY: all app release deploy clean core package package-app
