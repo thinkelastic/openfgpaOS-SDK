@@ -1,0 +1,65 @@
+/* compat/limits — Minimal std::numeric_limits for openfpgaOS / VexRiscV
+ * When OF_PC is defined (native PC build) this header includes the real
+ * <limits> so that correctness tests work on the host.
+ *
+ * The standard <limits> header is part of libstdc++, which is not available
+ * in the SDK's freestanding build environment.
+ *
+ * This header provides the subset of std::numeric_limits used by the
+ * raytracing code:
+ *   std::numeric_limits<float>::infinity()
+ *   std::numeric_limits<double>::infinity()   (maps to float range)
+ *   std::numeric_limits<int>::max()
+ *
+ * On RV32IMF, double is soft-float, so numeric_limits<double> is clamped
+ * to the float range for practical purposes.
+ */
+#ifndef _OF_COMPAT_LIMITS_H
+#define _OF_COMPAT_LIMITS_H
+
+#ifdef OF_PC
+/* Native PC build: use the real C++ standard library. */
+#include <limits>
+#else /* embedded VexRiscV build */
+
+namespace std {
+
+template<typename T> struct numeric_limits {};
+
+template<> struct numeric_limits<float> {
+    static constexpr bool is_integer = false;
+    static constexpr bool is_signed  = true;
+    static float infinity() { return __builtin_huge_valf(); }
+    static float max()      { return __FLT_MAX__; }
+    static float min()      { return __FLT_MIN__; }
+    static float epsilon()  { return __FLT_EPSILON__; }
+};
+
+template<> struct numeric_limits<double> {
+    /* double on RV32IMF is soft-float; values are clamped to float range */
+    static constexpr bool is_integer = false;
+    static constexpr bool is_signed  = true;
+    static double infinity() { return (double)__builtin_huge_valf(); }
+    static double max()      { return (double)__FLT_MAX__; }
+    static double min()      { return (double)__FLT_MIN__; }
+    static double epsilon()  { return (double)__FLT_EPSILON__; }
+};
+
+template<> struct numeric_limits<int> {
+    static constexpr bool is_integer = true;
+    static constexpr bool is_signed  = true;
+    static int max() { return __INT_MAX__; }
+    static int min() { return (-__INT_MAX__ - 1); }
+};
+
+template<> struct numeric_limits<unsigned int> {
+    static constexpr bool is_integer = true;
+    static constexpr bool is_signed  = false;
+    static unsigned int max() { return ~0u; }
+    static unsigned int min() { return 0u; }
+};
+
+} /* namespace std */
+
+#endif /* OF_PC */
+#endif /* _OF_COMPAT_LIMITS_H */

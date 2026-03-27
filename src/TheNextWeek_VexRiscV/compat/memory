@@ -1,0 +1,110 @@
+/* compat/memory — Minimal std::shared_ptr / std::make_shared for openfpgaOS
+ * When OF_PC is defined (native PC build) this header includes the real
+ * <memory> so that correctness tests work on the host.
+ *
+ * The standard <memory> header is part of libstdc++, which is not available
+ * in the SDK's freestanding build environment.
+ *
+ * This header provides a single-threaded reference-counting shared_ptr that:
+ *   - Uses operator new/delete (provided by of_cxxabi.cpp)
+ *   - Requires no exceptions (-fno-exceptions compatible)
+ *   - Requires no RTTI (-fno-rtti compatible)
+ *   - Supports implicit upcast (derived* → base*) for shared_ptr<U> → shared_ptr<T>
+ *
+ * Implementation:
+ *   make_shared<T>(args...) allocates:
+ *     1. A T object via   new T(args...)
+ *     2. A ref-count via  new int(1)
+ *   Destruction (ref-count → 0) calls delete on both.
+ *   Virtual destructors in hittable / material ensure correct cleanup.
+ *
+ * NOTE: Two separate allocations per make_shared call (unlike std::make_shared
+ * which uses one combined allocation).  For embedded use this is acceptable.
+ */
+#ifndef _OF_COMPAT_MEMORY_H
+#define _OF_COMPAT_MEMORY_H
+
+#ifdef OF_PC
+/* Native PC build: use the real C++ standard library. */
+#include <memory>
+using std::shared_ptr;
+using std::make_shared;
+#else /* embedded VexRiscV build */
+
+namespace std {
+
+template<typename T>
+class shared_ptr {
+public:
+    /* ── Constructors / destructor ─────────────────────────────────────── */
+
+    shared_ptr() : _p(nullptr), _r(nullptr) {}
+
+    /* Internal constructor used by make_shared */
+    shared_ptr(T *p, int *r) : _p(p), _r(r) {}
+
+    shared_ptr(const shared_ptr &o) : _p(o._p), _r(o._r) { _inc(); }
+
+    /* Implicit upcast: shared_ptr<U> (e.g. sphere) → shared_ptr<T> (hittable) */
+    template<typename U>
+    shared_ptr(const shared_ptr<U> &o) : _p(o.get()), _r(o._refp()) { _inc(); }
+
+    shared_ptr &operator=(const shared_ptr &o) {
+        if (this != &o) { _dec(); _p = o._p; _r = o._r; _inc(); }
+        return *this;
+    }
+
+    template<typename U>
+    shared_ptr &operator=(const shared_ptr<U> &o) {
+        _dec();
+        _p = o.get();
+        _r = o._refp();
+        _inc();
+        return *this;
+    }
+
+    ~shared_ptr() { _dec(); }
+
+    /* ── Accessors ──────────────────────────────────────────────────────── */
+
+    T *get()          const { return _p; }
+    T &operator*()    const { return *_p; }
+    T *operator->()   const { return _p; }
+    explicit operator bool() const { return _p != nullptr; }
+
+    /* Public for cross-instantiation access (template friend workaround) */
+    int *_refp() const { return _r; }
+
+private:
+    T   *_p;   /* managed object pointer */
+    int *_r;   /* reference count pointer (nullptr if empty) */
+
+    void _inc() { if (_r) ++(*_r); }
+
+    void _dec() {
+        if (_r && --(*_r) == 0) {
+            delete _p;   /* calls virtual destructor if T has one */
+            delete _r;
+        }
+        _p = nullptr;
+        _r = nullptr;
+    }
+};
+
+/* ── make_shared ──────────────────────────────────────────────────────── */
+
+template<typename T, typename... Args>
+shared_ptr<T> make_shared(Args&&... args) {
+    T   *p = new T(static_cast<Args&&>(args)...);
+    int *r = new int(1);
+    return shared_ptr<T>(p, r);
+}
+
+} /* namespace std */
+
+/* Bring into global namespace for compatibility with original code */
+using std::shared_ptr;
+using std::make_shared;
+
+#endif /* OF_PC */
+#endif /* _OF_COMPAT_MEMORY_H */

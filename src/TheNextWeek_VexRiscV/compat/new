@@ -1,0 +1,23 @@
+/* compat/new — Placement new for freestanding openfpgaOS builds.
+ *
+ * The SDK's of_cxxabi.cpp provides regular operator new/delete.
+ * Placement new is a C++ language primitive that is NOT declared in
+ * freestanding mode without <new>.  We declare it here for use by
+ * compat/memory and other headers that construct objects in allocated memory.
+ *
+ * Guard prevents double-declaration if a future GCC internal header
+ * already provides it.
+ */
+#ifndef _OF_COMPAT_NEW_H
+#define _OF_COMPAT_NEW_H
+
+#ifndef __PLACEMENT_NEW_INLINE
+#define __PLACEMENT_NEW_INLINE
+
+inline void *operator new  (__SIZE_TYPE__, void *p) noexcept { return p; }
+inline void  operator delete(void *,       void *)  noexcept {}
+inline void *operator new[](__SIZE_TYPE__, void *p) noexcept { return p; }
+inline void  operator delete[](void *,     void *)  noexcept {}
+
+#endif /* __PLACEMENT_NEW_INLINE */
+#endif /* _OF_COMPAT_NEW_H */
