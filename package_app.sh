@@ -1,19 +1,21 @@
 #!/bin/bash
 #
-# openfpgaOS SDK — mi_app Packager
+# openfpgaOS SDK — App Packager
 #
-# Builds the release (make release → build/sdk/) and packages it into a
-# distributable ZIP that can be extracted directly to an Analogue Pocket
-# SD card.
+# Builds the release (make release APP=<name> → build/sdk/) and packages it
+# into a distributable ZIP that can be extracted directly to an Analogue
+# Pocket SD card.
 #
-# build/sdk/ already contains only the mi_app artefacts:
+# build/sdk/ contains only the named app's artifacts:
 #   Cores/ThinkElastic.openfpgaOS/   — bitstream, loader, JSON configs
-#   Assets/openfpgaos/common/        — os.bin + mi_app.elf (+ any data files)
-#   Assets/openfpgaos/ThinkElastic.openfpgaOS/ — mi_app instance JSON only
+#   Assets/openfpgaos/common/        — os.bin + <app>.elf (+ any data files)
+#   Assets/openfpgaos/ThinkElastic.openfpgaOS/ — <app> instance JSON only
 #   Platforms/                       — platform descriptor + image
 #
 # Usage:
-#   ./package_mi_app.sh
+#   ./package_app.sh                 Package the default app (mi_app)
+#   ./package_app.sh myapp           Package src/myapp/
+#   APP=myapp ./package_app.sh       Same, via environment variable
 #
 
 set -e
@@ -23,15 +25,17 @@ CYAN='\033[96m'
 RESET='\033[0m'
 
 SDK_DIR="$(cd "$(dirname "$0")" && pwd)"
-DIST="$SDK_DIR/dist/sdk"
+
+# ── Resolve app name: arg > env var > default ─────────────────────
+APP_NAME="${1:-${APP:-mi_app}}"
 
 BUILD="$SDK_DIR/build/sdk"
 RELEASES="$SDK_DIR/releases"
 
 # ── Build / refresh build/sdk/ ────────────────────────────────────
-echo -e "${CYAN}=== mi_app Packager ===${RESET}"
+echo -e "${CYAN}=== App Packager (APP=$APP_NAME) ===${RESET}"
 echo "  Building release..."
-make -C "$SDK_DIR" release
+make -C "$SDK_DIR" release APP="$APP_NAME"
 
 # ── Verify build/sdk/ is ready ───────────────────────────────────
 if [ ! -d "$BUILD/Cores" ]; then
@@ -42,7 +46,7 @@ fi
 # ── Read metadata from the assembled core.json ───────────────────
 CORE_NAME=$(ls "$BUILD/Cores/" 2>/dev/null | head -1)
 if [ -z "$CORE_NAME" ]; then
-    echo "Error: no core found in build/sdk/Cores/. Run 'make release' first."
+    echo "Error: no core found in build/sdk/Cores/. Run 'make release APP=$APP_NAME' first."
     exit 1
 fi
 
@@ -58,7 +62,7 @@ with open('$CORE_JSON') as f:
     d = json.load(f)
 print(d['core']['metadata']['description'])
 " 2>/dev/null)
-[ -z "$GAME_NAME" ] && { echo "Warning: could not read description from $CORE_JSON, using 'mi_app'"; GAME_NAME="mi_app"; }
+[ -z "$GAME_NAME" ] && { echo "Warning: could not read description from $CORE_JSON, using '$APP_NAME'"; GAME_NAME="$APP_NAME"; }
 
 CORE_VERSION=$(python3 -c "
 import json, sys
@@ -68,7 +72,7 @@ print(d['core']['metadata']['version'])
 " 2>/dev/null)
 [ -z "$CORE_VERSION" ] && { echo "Warning: could not read version from $CORE_JSON, using '1.0.0'"; CORE_VERSION="1.0.0"; }
 
-OUTPUT_ZIP="$RELEASES/mi_app-v${CORE_VERSION}.zip"
+OUTPUT_ZIP="$RELEASES/${APP_NAME}-v${CORE_VERSION}.zip"
 
 echo "  Version : $CORE_VERSION"
 echo "  Output  : $OUTPUT_ZIP"
