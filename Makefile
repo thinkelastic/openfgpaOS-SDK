@@ -1,7 +1,7 @@
 # openfpgaOS SDK Makefile
 #
 # Usage:
-#   make              Build all apps, create release/
+#   make              Build mi_app, create release/
 #   make deploy       Copy release/ to Pocket SD card
 #   make clean        Remove all build artifacts
 #   make core         Build a standalone game core (interactive)
@@ -18,14 +18,14 @@ REL_PLATFORM = $(RELEASE)/Platforms
 RUNTIME      = runtime
 
 # ── Default target ───────────────────────────────────────────────
-all: apps release
+all: mi_app release
 
-# ── Build all bundled apps ───────────────────────────────────────
-apps:
-	$(MAKE) -C src/apps
+# ── Build mi_app ─────────────────────────────────────────────────
+mi_app:
+	$(MAKE) -C src/mi_app
 
 # ── Create release/ directory ────────────────────────────────────
-release: apps
+release: mi_app
 	@echo "Creating release/..."
 	@mkdir -p $(REL_CORE) $(REL_ASSETS) $(REL_INSTANCE) $(REL_PLATFORM)/_images
 	@# Core: bitstream + loader
@@ -38,13 +38,10 @@ release: apps
 	@[ -d dist/sdk/platform/_images ] && cp dist/sdk/platform/_images/*.bin $(REL_PLATFORM)/_images/ 2>/dev/null || true
 	@# OS binary
 	@cp $(RUNTIME)/os.bin $(REL_ASSETS)/
-	@# Bundled apps + data files
-	@for d in src/apps/*/; do \
-		name=$$(basename "$$d"); \
-		[ -f "$$d/app.elf" ] && cp "$$d/app.elf" "$(REL_ASSETS)/$$name.elf" || true; \
-		find "$$d" -maxdepth 1 \( -name "*.mid" -o -name "*.wav" -o -name "*.dat" -o -name "*.png" \) \
-			-exec cp {} "$(REL_ASSETS)/" \; 2>/dev/null || true; \
-	done
+	@# mi_app ELF + data files
+	@[ -f src/mi_app/app.elf ] && cp src/mi_app/app.elf $(REL_ASSETS)/mi_app.elf || true
+	@find src/mi_app -maxdepth 1 \( -name "*.mid" -o -name "*.wav" -o -name "*.dat" -o -name "*.png" \) \
+		-exec cp {} "$(REL_ASSETS)/" \; 2>/dev/null || true
 	@# Instance JSONs
 	@[ -d dist/sdk/instances ] && cp dist/sdk/instances/*.json $(REL_INSTANCE)/ 2>/dev/null || true
 	@echo "Release ready: $(RELEASE)/"
@@ -55,7 +52,7 @@ deploy: release
 
 # ── Clean ────────────────────────────────────────────────────────
 clean:
-	$(MAKE) -C src/apps clean
+	$(MAKE) -C src/mi_app clean
 	rm -rf build releases
 
 # ── Core packaging ───────────────────────────────────────────────
@@ -65,4 +62,4 @@ core:
 package:
 	./package.sh
 
-.PHONY: all apps release deploy clean core package
+.PHONY: all mi_app release deploy clean core package
