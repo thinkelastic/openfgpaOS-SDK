@@ -2,7 +2,7 @@
 
 Build games for the [Analogue Pocket](https://www.analogue.co/pocket) in C or C++.
 
-**Hardware:** VexRiscv rv32imafc @ 100 MHz, 64 MB SDRAM, 320x240 video, 48 kHz stereo audio, 18-channel OPL3 FM synthesis + MIDI playback library.
+**Hardware:** VexiiRiscv rv32imafc @ 100 MHz, 8 KB I-cache + 32 KB D-cache, 64 MB SDRAM, 320x240 video, 48 kHz stereo audio, 18-channel OPL3 FM synthesis + MIDI playback library.
 
 ## Getting Started
 
@@ -775,6 +775,7 @@ openfpgaOS-SDK/
 │   │   ├── cray/         <- Real-time C raytracer
 │   │   ├── cxxdemo/      <- C++ classes, templates, iostream
 │   │   ├── fbdemo/       <- PNG framebuffer display
+│   │   ├── memdemo/     <- memset/memcpy throughput benchmark
 │   │   ├── interactdemo/ <- Pocket menu variables
 │   │   ├── mididemo/     <- MIDI playback (of_midi library, 18-ch OPL3)
 │   │   ├── savea/        <- Save slot integrity test

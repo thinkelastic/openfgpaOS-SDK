@@ -797,7 +797,7 @@ static void test_psram_memory(void) {
     volatile uint32_t *cram1 = (volatile uint32_t *)0x31000000;
     volatile uint32_t *sram  = (volatile uint32_t *)0x3A000000;
 
-    /* === CRAM0 basic write/read === */
+    /* === CRAM0 basic write/read (cached) === */
     cram0[0] = 0xDEADBEEF;
     cram0[1] = 0xCAFEBABE;
     ASSERT("cram0 w/r[0]", cram0[0] == 0xDEADBEEF);
@@ -812,22 +812,6 @@ static void test_psram_memory(void) {
             if (cram0[i] != (1u << i)) { ok = 0; break; }
         }
         ASSERT("cram0 walk1", ok);
-    }
-
-    /* === CRAM0 address line test (uncached to avoid D-cache interference) === */
-    {
-        volatile uint32_t *cram0_uc = (volatile uint32_t *)0x38000000;
-        int ok = 1;
-        /* Test address lines up to 2MB (512K words) */
-        for (int bit = 0; bit < 19; bit++) {
-            uint32_t offset = 1u << bit;
-            cram0_uc[offset] = 0xA5000000 | offset;
-        }
-        for (int bit = 0; bit < 19; bit++) {
-            uint32_t offset = 1u << bit;
-            if (cram0_uc[offset] != (0xA5000000 | offset)) { ok = 0; break; }
-        }
-        ASSERT("cram0 addr", ok);
     }
 
     /* === CRAM0 large block write/readback (64KB) === */

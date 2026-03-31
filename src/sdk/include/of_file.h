@@ -37,11 +37,15 @@ typedef struct {
 #include "of_syscall.h"
 #include "of_syscall_numbers.h"
 
+/* Read from data slot. dest can be SDRAM, CRAM, or BRAM.
+ * SDRAM destinations bounce through CRAM to avoid bus contention.
+ * CRAM destinations are written directly by the bridge (fastest). */
 static inline int of_file_read(uint32_t slot_id, uint32_t offset,
                                void *dest, uint32_t length) {
     return (int)__of_syscall4(OF_SYS_FILE_READ,
                               slot_id, offset, (long)dest, length);
 }
+
 
 static inline long of_file_size(uint32_t slot_id) {
     return __of_syscall1(OF_SYS_FILE_SIZE, slot_id);

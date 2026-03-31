@@ -126,6 +126,14 @@ extern "C" {
 #define OF_SYS_LZW_COMPRESS            0x10E0
 #define OF_SYS_LZW_UNCOMPRESS          0x10E1
 
+/* DMA engine */
+#define OF_SYS_DMA_COPY                0x10F0
+#define OF_SYS_DMA_FILL                0x10F1
+#define OF_SYS_DMA_COPY_ASYNC          0x10F2
+#define OF_SYS_DMA_FILL_ASYNC          0x10F3
+#define OF_SYS_DMA_WAIT                0x10F4
+#define OF_SYS_DMA_BUSY                0x10F5
+
 #ifdef __cplusplus
 }
 #endif

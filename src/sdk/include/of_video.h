@@ -166,51 +166,70 @@ static inline void of_video_blit_letterbox(const uint8_t *src, int src_w, int sr
 
 #endif /* OF_PC */
 
-/* Blit a rectangular region from src buffer to the framebuffer. */
+/* Blit a rectangular region from src buffer to the framebuffer.
+ * Transparent: pixel value 0 is skipped. For opaque blits, use of_blit_opaque. */
 static inline void of_blit(int dx, int dy, int w, int h,
                             const uint8_t *src, int src_stride) {
     uint8_t *fb = of_video_surface();
+    /* Clip to screen bounds */
+    int sx = 0, sy = 0;
+    if (dx < 0) { sx = -dx; w += dx; dx = 0; }
+    if (dy < 0) { sy = -dy; h += dy; dy = 0; }
+    if (dx + w > OF_SCREEN_W) w = OF_SCREEN_W - dx;
+    if (dy + h > OF_SCREEN_H) h = OF_SCREEN_H - dy;
+    if (w <= 0 || h <= 0) return;
     for (int y = 0; y < h; y++) {
-        int fy = dy + y;
-        if ((unsigned)fy >= OF_SCREEN_H) continue;
-        for (int x = 0; x < w; x++) {
-            int fx = dx + x;
-            if ((unsigned)fx >= OF_SCREEN_W) continue;
-            uint8_t px = src[y * src_stride + x];
-            if (px) fb[fy * OF_SCREEN_W + fx] = px;
-        }
+        const uint8_t *sp = src + (sy + y) * src_stride + sx;
+        uint8_t *dp = fb + (dy + y) * OF_SCREEN_W + dx;
+        for (int x = 0; x < w; x++)
+            if (sp[x]) dp[x] = sp[x];
     }
 }
 
-/* Blit with a fixed palette offset. */
+/* Opaque blit: copies all pixels (no transparency check). Uses memcpy per row. */
+static inline void of_blit_opaque(int dx, int dy, int w, int h,
+                                   const uint8_t *src, int src_stride) {
+    uint8_t *fb = of_video_surface();
+    int sx = 0, sy = 0;
+    if (dx < 0) { sx = -dx; w += dx; dx = 0; }
+    if (dy < 0) { sy = -dy; h += dy; dy = 0; }
+    if (dx + w > OF_SCREEN_W) w = OF_SCREEN_W - dx;
+    if (dy + h > OF_SCREEN_H) h = OF_SCREEN_H - dy;
+    if (w <= 0 || h <= 0) return;
+    for (int y = 0; y < h; y++)
+        __builtin_memcpy(fb + (dy + y) * OF_SCREEN_W + dx,
+                         src + (sy + y) * src_stride + sx, w);
+}
+
+/* Blit with a fixed palette offset (transparent: pixel 0 skipped). */
 static inline void of_blit_pal(int dx, int dy, int w, int h,
                                 const uint8_t *src, int src_stride,
                                 uint8_t pal_offset) {
     uint8_t *fb = of_video_surface();
+    int sx = 0, sy = 0;
+    if (dx < 0) { sx = -dx; w += dx; dx = 0; }
+    if (dy < 0) { sy = -dy; h += dy; dy = 0; }
+    if (dx + w > OF_SCREEN_W) w = OF_SCREEN_W - dx;
+    if (dy + h > OF_SCREEN_H) h = OF_SCREEN_H - dy;
+    if (w <= 0 || h <= 0) return;
     for (int y = 0; y < h; y++) {
-        int fy = dy + y;
-        if ((unsigned)fy >= OF_SCREEN_H) continue;
-        for (int x = 0; x < w; x++) {
-            int fx = dx + x;
-            if ((unsigned)fx >= OF_SCREEN_W) continue;
-            uint8_t px = src[y * src_stride + x];
-            if (px) fb[fy * OF_SCREEN_W + fx] = px + pal_offset;
-        }
+        const uint8_t *sp = src + (sy + y) * src_stride + sx;
+        uint8_t *dp = fb + (dy + y) * OF_SCREEN_W + dx;
+        for (int x = 0; x < w; x++)
+            if (sp[x]) dp[x] = sp[x] + pal_offset;
     }
 }
 
-/* Fill a rectangle with a solid palette index. */
+/* Fill a rectangle with a solid palette index. Uses memset per row. */
 static inline void of_fill_rect(int x, int y, int w, int h, uint8_t color) {
     uint8_t *fb = of_video_surface();
-    for (int ry = 0; ry < h; ry++) {
-        int fy = y + ry;
-        if ((unsigned)fy >= OF_SCREEN_H) continue;
-        for (int rx = 0; rx < w; rx++) {
-            int fx = x + rx;
-            if ((unsigned)fx >= OF_SCREEN_W) continue;
-            fb[fy * OF_SCREEN_W + fx] = color;
-        }
-    }
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > OF_SCREEN_W) w = OF_SCREEN_W - x;
+    if (y + h > OF_SCREEN_H) h = OF_SCREEN_H - y;
+    if (w <= 0 || h <= 0) return;
+    for (int ry = 0; ry < h; ry++)
+        __builtin_memset(fb + (y + ry) * OF_SCREEN_W + x, color, w);
 }
 
 #ifdef __cplusplus
