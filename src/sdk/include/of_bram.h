@@ -14,7 +14,7 @@
  * Build with app_bram.ld linker script (sdk_bram.mk) instead of app.ld.
  * The OS ELF loader copies .app_fasttext from the ELF to BRAM at load time.
  *
- * Available BRAM: ~55KB (0x2000-0xFE00). OS uses 0x0000-0x1FFF.
+ * Available BRAM: ~23KB (0x2000-0x7E00). OS uses 0x0000-0x1FFF.
  * Top 512 bytes reserved for trap handler stack frame.
  */
 
@@ -38,8 +38,8 @@ extern "C" {
 
 /* App BRAM region boundaries (must match hal/regs.h) */
 #define OF_APP_BRAM_BASE   0x00002000
-#define OF_APP_BRAM_END    0x0000FE00
-#define OF_APP_BRAM_SIZE   (OF_APP_BRAM_END - OF_APP_BRAM_BASE)  /* ~55KB */
+#define OF_APP_BRAM_END    0x00007E00
+#define OF_APP_BRAM_SIZE   (OF_APP_BRAM_END - OF_APP_BRAM_BASE)  /* ~23KB */
 
 #ifdef __cplusplus
 }

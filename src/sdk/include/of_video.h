@@ -1,7 +1,7 @@
 /*
  * of_video.h -- Video subsystem API for openfpgaOS
  *
- * 320x240 framebuffer, 8-bit indexed color, double-buffered.
+ * 320x240 framebuffer, 8-bit indexed color, triple-buffered.
  */
 
 #ifndef OF_VIDEO_H

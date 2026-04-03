@@ -659,20 +659,20 @@ Place instance JSONs in `dist/<GameName>/instances/`. Files referenced by the in
 
 ```
 0x00000000 ┌──────────────────────┐
-           │ BRAM (64 KB)         │
+           │ BRAM (32 KB)         │
            │ 0x0000-0x1FFF: OS    │  Boot, trap handler
-           │ 0x2000-0xFDFF: App   │  OF_FASTTEXT (~55 KB)
-           │ 0xFE00-0xFFFF: Stack │  Trap frame
-0x00010000 ├──────────────────────┤
+           │ 0x2000-0x7DFF: App   │  OF_FASTTEXT (~23 KB)
+           │ 0x7E00-0x7FFF: Stack │  Trap frame
+0x00008000 ├──────────────────────┤
            │                      │
-0x10200000 ├──────────────────────┤
+0x10300000 ├──────────────────────┤
            │ OS Kernel (SDRAM)    │  ~128 KB
 0x10400000 ├──────────────────────┤
            │ App Code + Data      │  Up to 48 MB
            │ (loaded from ELF)    │
 0x13FFFFFF └──────────────────────┘
 
-0x30000000   CRAM1: Save slots (10 x 256 KB)
+0x39000000   CRAM1: Save slots (10 x 256 KB)
 ```
 
 ---

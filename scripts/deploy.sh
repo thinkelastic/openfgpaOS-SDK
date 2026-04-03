@@ -100,7 +100,7 @@ for appdir in "$SDK_DIR/src/apps"/*/; do
         APP_COUNT=$((APP_COUNT + 1))
     fi
     # Copy app data files
-    for f in "$appdir"/*.mid "$appdir"/*.wav "$appdir"/*.dat "$appdir"/*.png; do
+    for f in "$appdir"/*.mid "$appdir"/*.wav "$appdir"/*.dat "$appdir"/*.png "$appdir"/*.json; do
         [ -f "$f" ] && cp "$f" "$ASSETS_COMMON/"
     done
 done
@@ -109,22 +109,13 @@ echo -e "  ${GREEN}✓${RESET} Bundled apps ($APP_COUNT)"
 # Clean stale instance JSONs from SD card
 rm -f "$ASSETS_INSTANCE"/*.json 2>/dev/null
 
-# Bundled instance JSONs — only deploy if the app ELF exists
+# Deploy all instance JSONs
 INST_COUNT=0
 if [ -d "$SDK_DIR/dist/sdk/instances" ]; then
     for inst in "$SDK_DIR/dist/sdk/instances"/*.json; do
         [ -f "$inst" ] || continue
-        # Extract ELF filename from instance JSON (slot id 2)
-        elf_name=$(python3 -c "
-import json,sys
-d=json.load(open('$inst'))
-for s in d['instance']['data_slots']:
-    if s['id']==2: print(s['filename']); break
-" 2>/dev/null)
-        if [ -n "$elf_name" ] && [ -f "$ASSETS_COMMON/$elf_name" ]; then
-            cp "$inst" "$ASSETS_INSTANCE/"
-            INST_COUNT=$((INST_COUNT + 1))
-        fi
+        cp "$inst" "$ASSETS_INSTANCE/"
+        INST_COUNT=$((INST_COUNT + 1))
     done
     echo -e "  ${GREEN}✓${RESET} Instance JSONs ($INST_COUNT)"
 fi
