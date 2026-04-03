@@ -182,12 +182,25 @@ void test_file_io(void) {
                 ASSERT("coherency 2nd", !stale2);
             }
 
+            /* Mock fopen: raw open+close via POSIX, no musl FILE/malloc */
+            {
+                write(1, "[P1]", 4);
+                int mock_fd = open("slot:1", O_RDONLY);
+                write(1, "[P2]", 4);
+                if (mock_fd >= 0) close(mock_fd);
+                write(1, "[P3]", 4);
+            }
+
             /* Large read coherency: 64KB */
             static uint8_t big_coh[65536];
-            memset(big_coh, 0xCC, sizeof(big_coh));
+            write(1, "[M]", 3);
+            memset(big_coh, 0xCC, 4096);
+            write(1, "[F]", 3);
             f = fopen("slot:1", "rb");
+            write(1, "[R]", 3);
             if (f) {
                 fread(big_coh, 1, 65536, f);
+                write(1, "[D]", 3);
                 fclose(f);
                 /* Check first, middle, and last cached regions */
                 int ok = (big_coh[0] != 0xCC) &&
