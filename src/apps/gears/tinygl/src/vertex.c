@@ -371,8 +371,11 @@ void glopVertex(GLParam *p)
 
     case GL_QUAD_STRIP:
         if (n == 4) {
-            gl_draw_triangle(&c->vertex[0], &c->vertex[1], &c->vertex[2]);
-            gl_draw_triangle(&c->vertex[1], &c->vertex[3], &c->vertex[2]);
+            // gl_draw_triangle(&c->vertex[0], &c->vertex[1], &c->vertex[2]);
+            // gl_draw_triangle(&c->vertex[1], &c->vertex[3], &c->vertex[2]);
+            // Después (fix):
+            gl_draw_triangle(&c->vertex[0], &c->vertex[1], &c->vertex[3]);
+            gl_draw_triangle(&c->vertex[0], &c->vertex[3], &c->vertex[2]);
             for (GLint i = 0; i < 2; i++)
                 c->vertex[i] = c->vertex[i + 2];
             n = 2;

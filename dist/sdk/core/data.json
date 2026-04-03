@@ -30,9 +30,9 @@
             {
                 "id": 3,
                 "name": "Data 1",
-                "required": false,
-                "parameters": 0,
-                "extensions": ["mid", "dat", "png", "bin", "grp", "pak", "wad", "rom", "nes"],
+                "required": true,
+                "parameters": 3,
+                "extensions": ["xm", "mod", "s3m", "it"],
                 "deferload": true
             },
             {

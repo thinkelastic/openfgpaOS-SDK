@@ -233,6 +233,8 @@ static void gear(GLfloat inner_radius,
     r2 = outer_radius + tooth_depth / 2.0f;
     da = 2.0f * M_PI / teeth / 4.0f;
 
+    glShadeModel(GL_FLAT);
+
     /* ── Cara frontal (normal fija apuntando +Z) ───────────────── */
     glNormal3f(0.0f, 0.0f, 1.0f);
 
@@ -244,8 +246,10 @@ static void gear(GLfloat inner_radius,
         angle = i * 2.0f * M_PI / teeth;
         glVertex3f(r0 * cos(angle), r0 * sin(angle),  width * 0.5f);
         glVertex3f(r1 * cos(angle), r1 * sin(angle),  width * 0.5f);
-        glVertex3f(r0 * cos(angle), r0 * sin(angle),  width * 0.5f);
-        glVertex3f(r1 * cos(angle + 3*da), r1 * sin(angle + 3*da), width * 0.5f);
+        if (i < teeth) {
+            glVertex3f(r0 * cos(angle), r0 * sin(angle),  width * 0.5f);
+            glVertex3f(r1 * cos(angle + 3*da), r1 * sin(angle + 3*da), width * 0.5f);
+        }
     }
     glEnd();
 
@@ -276,8 +280,10 @@ static void gear(GLfloat inner_radius,
         angle = i * 2.0f * M_PI / teeth;
         glVertex3f(r1 * cos(angle),        r1 * sin(angle),        -width * 0.5f);
         glVertex3f(r0 * cos(angle),        r0 * sin(angle),        -width * 0.5f);
-        glVertex3f(r1 * cos(angle + 3*da), r1 * sin(angle + 3*da), -width * 0.5f);
-        glVertex3f(r0 * cos(angle),        r0 * sin(angle),        -width * 0.5f);
+        if (i < teeth) {
+            glVertex3f(r1 * cos(angle + 3*da), r1 * sin(angle + 3*da), -width * 0.5f);
+            glVertex3f(r0 * cos(angle),        r0 * sin(angle),        -width * 0.5f);
+        }
     }
     glEnd();
 
@@ -402,7 +408,7 @@ void initScene()
     glEnable(GL_CULL_FACE);
 
     glEnable(GL_LIGHT0);
-    // glEnable(GL_DEPTH_TEST);
+    glEnable(GL_DEPTH_TEST);
 
     //glEnable(GL_POLYGON_STIPPLE);
     //	glDisable(GL_POLYGON_STIPPLE);
@@ -467,8 +473,8 @@ int main(void)
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glViewport(0, 0, WIN_W, WIN_H);
     glShadeModel(GL_FLAT);
-    //glEnable(GL_LIGHTING);
-    glSetEnableSpecular(GL_TRUE);
+    glEnable(GL_LIGHTING);
+    //glSetEnableSpecular(GL_TRUE);
 
     glDisable(GL_BLEND);
     glDepthMask(GL_TRUE);

@@ -51,7 +51,7 @@ release: apps
 	@for d in src/apps/*/; do \
 		name=$$(basename "$$d"); \
 		[ -f "$$d/app.elf" ] && cp "$$d/app.elf" "$(REL_ASSETS)/$$name.elf" || true; \
-		find "$$d" -maxdepth 1 \( -name "*.mid" -o -name "*.wav" -o -name "*.dat" -o -name "*.png" \) \
+		find "$$d" -maxdepth 1 \( -name "*.mid" -o -name "*.wav" -o -name "*.mod" -o -name "*.s3m" -o -name "*.xm" -o -name "*.it" -o -name "*.dat" -o -name "*.png" \) \
 			-exec cp {} "$(REL_ASSETS)/" \; 2>/dev/null || true; \
 	done
 	@# Standalone games (src/<name>/<name>.elf)
@@ -59,7 +59,7 @@ release: apps
 		[ "$$d" = "src/apps/" ] || [ "$$d" = "src/sdk/" ] && continue; \
 		name=$$(basename "$$d"); \
 		[ -f "$$d/$$name.elf" ] && cp "$$d/$$name.elf" "$(REL_ASSETS)/" || true; \
-		find "$$d" -maxdepth 1 \( -name "*.mid" -o -name "*.wav" -o -name "*.dat" -o -name "*.png" \) \
+		find "$$d" -maxdepth 1 \( -name "*.mid" -o -name "*.wav" -o -name "*.mod" -o -name "*.s3m" -o -name "*.xm" -o -name "*.it" -o -name "*.dat" -o -name "*.png" \) \
 			-exec cp {} "$(REL_ASSETS)/" \; 2>/dev/null || true; \
 	done
 	@# Instance JSONs
