@@ -19,9 +19,9 @@ static uint8_t midi_buf[MIDI_MAX_SIZE] __attribute__((aligned(512)));
 static uint32_t midi_len;
 
 static int load_midi_file(void) {
-    FILE *f = fopen("music.mid", "rb");
-    if (!f)
-        return -1;
+    /* TODO: use fopen("music.mid") when DS_CMD_GETFILE returns filenames */
+    FILE *f = fopen("slot:3", "rb");
+    if (!f) return -1;
 
     size_t n = fread(midi_buf, 1, MIDI_MAX_SIZE, f);
     fclose(f);
@@ -38,8 +38,6 @@ static int load_midi_file(void) {
 }
 
 int main(void) {
-    of_file_slot_register(3, "music.mid");
-
     printf("\033[2J\033[H");
     printf("    openfpgaOS MIDI Player\n");
     printf("    ======================\n\n");
@@ -115,7 +113,7 @@ int main(void) {
         }
 
         of_midi_pump();
-        of_delay_ms(1);
+        usleep(1 * 1000);
     }
 
     return 0;

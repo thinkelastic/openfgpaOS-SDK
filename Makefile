@@ -67,7 +67,7 @@ release: apps
 	@echo "Release ready: $(RELEASE)/"
 
 # ── Deploy to SD card ────────────────────────────────────────────
-deploy: release
+deploy: all
 	@./scripts/deploy.sh
 
 # ── Build host tools ─────────────────────────────────────────────

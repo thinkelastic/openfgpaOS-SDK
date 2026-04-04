@@ -14,7 +14,7 @@ extern "C" {
 #include <stdint.h>
 
 #define OF_AUDIO_RATE   48000
-#define OF_AUDIO_FIFO   2048
+#define OF_AUDIO_FIFO   512
 #define OF_OPL_CHANNELS 18
 
 #ifndef OF_PC

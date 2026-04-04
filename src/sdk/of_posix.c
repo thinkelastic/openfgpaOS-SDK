@@ -127,14 +127,4 @@ int abs(int x)                 { return x < 0 ? -x : x; }
 #include "of_syscall.h"
 #include "of_syscall_numbers.h"
 
-void of_print(const char *s) {
-    while (*s) __of_syscall1(OF_SYS_TERM_PUTCHAR, *s++);
-}
 
-unsigned int of_time_us(void) {
-    return (unsigned int)__of_syscall0(OF_SYS_TIMER_GET_US);
-}
-
-unsigned int of_time_ms(void) {
-    return (unsigned int)__of_syscall0(OF_SYS_TIMER_GET_MS);
-}
