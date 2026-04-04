@@ -27,7 +27,7 @@ extern "C" {
 
 #define OF_LIBC_MAGIC   0x4F46434C  /* 'OFCL' */
 #define OF_LIBC_VERSION 1
-#define OF_LIBC_ADDR    0x103FF000
+#define OF_LIBC_ADDR    0x00007C00  /* BRAM — avoids D-cache pollution */
 
 struct of_libc_table {
     uint32_t magic;

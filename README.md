@@ -661,7 +661,8 @@ Place instance JSONs in `dist/<GameName>/instances/`. Files referenced by the in
 0x00000000 ┌──────────────────────┐
            │ BRAM (32 KB)         │
            │ 0x0000-0x1FFF: OS    │  Boot, trap handler
-           │ 0x2000-0x7DFF: App   │  OF_FASTTEXT (~23 KB)
+           │ 0x2000-0x7BFF: App   │  OF_FASTTEXT (~23 KB)
+           │ 0x7C00-0x7DFF: libc  │  Jump table (BRAM, no D-cache)
            │ 0x7E00-0x7FFF: Stack │  Trap frame
 0x00008000 ├──────────────────────┤
            │                      │
