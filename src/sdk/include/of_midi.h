@@ -51,7 +51,7 @@ void of_midi_pause(void);
 void of_midi_resume(void);
 
 /* Process pending MIDI events.  Call this every frame.
- * Uses clock_us() internally for timing. */
+ * Uses of_time_us() internally for timing. */
 void of_midi_pump(void);
 
 /* Query state */

@@ -7,6 +7,7 @@
 
 #include "of.h"
 #include <stdio.h>
+#include <unistd.h>
 
 /* ======================================================================
  * Test function: 16.16 fixed-point multiply (tight inner loop)
