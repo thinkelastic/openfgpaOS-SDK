@@ -12,6 +12,8 @@
  */
 
 #include "of.h"
+#include <time.h>
+#include <unistd.h>
 #include <stdio.h>
 
 static const char *opt1_names[] = { "Off", "On" };

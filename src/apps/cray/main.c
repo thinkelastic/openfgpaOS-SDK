@@ -7,6 +7,8 @@
 #include <ctype.h>
 #include <errno.h>
 #include <stdint.h>
+#include <time.h>
+#include <unistd.h>
 
 struct vec3 {
 	float x, y, z;
@@ -115,7 +117,7 @@ int main(int argc, char **argv) {
 
 	start_time = clock_ms(); //get_millisec();
 	render(xres, yres, 1);
-	rend_time = clock_ms(); - start_time;
+	rend_time = clock_ms() - start_time;
 
 	//memcpy(back_buffer->pixels, front_buffer->pixels, xres * yres * sizeof(uint16_t));
     //of_video_flip();

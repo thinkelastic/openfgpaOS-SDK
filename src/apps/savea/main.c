@@ -15,6 +15,8 @@
 #define STEP      3
 
 #include "of.h"
+#include <time.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <string.h>
 

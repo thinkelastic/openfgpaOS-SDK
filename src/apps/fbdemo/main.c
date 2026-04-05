@@ -7,6 +7,8 @@
 #include <string.h>
 
 #include "of.h"
+#include <time.h>
+#include <unistd.h>
 #include "png.h"
 
 #define SCREEN_W 320

@@ -9,6 +9,8 @@
  */
 
 #include "of.h"
+#include <time.h>
+#include <unistd.h>
 #include <stdio.h>
 
 /* Maximum MIDI file size we support */
