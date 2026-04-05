@@ -81,18 +81,18 @@ endif
 
 # ── Pocket build ─────────────────────────────────────────────────
 $(BUILD_DIR)/app.elf: $(OBJS) $(APP_LD)
-	@mkdir -p $(BUILD_DIR)
+	@mkdir -p $(dir $@)
 	$(LD) $(ALL_LDFLAGS) -o $@ $(OBJS) $(LIBGCC)
 
 $(CRT_DIR)/%.o: $(CRT_DIR)/%.S
 	$(AS) $(ASFLAGS) -c -o $@ $<
 
 $(OBJ_DIR)/%.o: %.c
-	@mkdir -p $(OBJ_DIR)
+	@mkdir -p $(dir $@)
 	$(CC) $(ALL_CFLAGS) -c -o $@ $<
 
 $(OBJ_DIR)/%.o: %.cpp
-	@mkdir -p $(OBJ_DIR)
+	@mkdir -p $(dir $@)
 	$(CXX) $(ALL_CXXFLAGS) -c -o $@ $<
 
 # ── PC build (SDL2) ──────────────────────────────────────────────
