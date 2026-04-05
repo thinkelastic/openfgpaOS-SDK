@@ -1,21 +1,14 @@
 # openfpgaOS SDK Makefile
 #
 # Quick start:
-#   make setup        Install RISC-V toolchain
-#   make core         Create your app
-#
-# Then from src/<app>/:
-#   make              Build
-#   make deploy       Deploy to Pocket SD card
-#   make pc           Test on desktop (SDL2)
+#   make setup          Install RISC-V toolchain
+#   make core           Create your app
 
 # ── Paths ────────────────────────────────────────────────────────────
-CORE_ID      = ThinkElastic.openfpgaOS
-PLATFORM     = openfpgaos
-RUNTIME      = runtime
+RUNTIME = runtime
 
-# ── Detect user apps (src/<name>/ excluding apps/, sdk/, tools/) ─────
-USER_APPS := $(shell for d in src/*/; do \
+# ── Detect user app (src/<name>/ excluding apps/, sdk/, tools/) ──────
+APP_NAME := $(shell for d in src/*/; do \
 	[ "$$d" = "src/apps/" ] || [ "$$d" = "src/sdk/" ] || [ "$$d" = "src/tools/" ] && continue; \
 	[ -f "$$d/Makefile" ] && basename "$$d"; \
 done)
@@ -37,35 +30,35 @@ help:
 	@echo "  \\____/___/  SDK"
 	@echo ""
 	@echo "  Getting started:"
-	@echo "    make setup            Install RISC-V toolchain"
-	@echo "    make core             Create your app"
+	@echo "    make setup                Install RISC-V toolchain"
+	@echo "    make core                 Create your app"
 	@echo ""
 	@echo "  Then work from your app directory:"
 	@echo "    cd src/<app>"
-	@echo "    make                  Build"
-	@echo "    make exec             Build, push via UART, stream console"
-	@echo "    make deploy           Deploy to Pocket SD card"
-	@echo "    make package          Package core into a ZIP"
-	@echo "    make pc               Test on desktop (SDL2)"
-	@echo "    make clean            Remove build artifacts"
+	@echo "    make                      Build"
+	@echo "    make exec                 Build, push via UART, stream console"
+	@echo "    make deploy               Deploy to Pocket SD card"
+	@echo "    make package              Package core into a ZIP"
+	@echo "    make pc                   Test on desktop (SDL2)"
+	@echo "    make clean                Remove build artifacts"
 	@echo ""
 	@echo "  To work with the demo apps:"
 	@echo "    cd src/apps"
-	@echo "    make                  Build all demos"
-	@echo "    make new APP=demo     Create a new demo app"
-	@echo "    make package          Package SDK core into a ZIP"
-	@echo "    make deploy           Deploy SDK + demos to SD card"
-	@echo "    make clean            Remove build artifacts"
+	@echo "    make                      Build all demos"
+	@echo "    make new APP=demo         Create a new demo app"
+	@echo "    make package              Package SDK core into a ZIP"
+	@echo "    make deploy               Deploy SDK + demos to SD card"
+	@echo "    make clean                Remove build artifacts"
 	@echo ""
 	@echo "  From the root:"
-	@echo "    make build            Build everything"
-	@echo "    make build APP=<app>  Build sdk or <app>"
-	@echo "    make exec APP=<app>   Build, push via UART, stream console"
-	@echo "    make deploy           Deploy everything to SD card"
-	@echo "    make deploy APP=<app> Deploy sdk or <app> to SD card"
-	@echo "    make tools            Build PHDP host tools"
-	@echo "    make package          Package all cores into ZIPs"
-	@echo "    make clean            Remove all build artifacts"
+	@echo "    make build                Build everything"
+	@echo "    make build APP=<app>      Build sdk or <app>"
+	@echo "    make exec APP=<app>       Build, push via UART, stream console"
+	@echo "    make deploy               Deploy everything to SD card"
+	@echo "    make deploy APP=<app>     Deploy sdk or <app> to SD card"
+	@echo "    make tools                Build PHDP host tools"
+	@echo "    make package              Package all cores into ZIPs"
+	@echo "    make clean                Remove all build artifacts"
 
 # ── Setup ────────────────────────────────────────────────────────────
 setup:
@@ -76,9 +69,6 @@ core:
 	@./scripts/customize.sh
 
 # ── Build ────────────────────────────────────────────────────────────
-# make build            → build sdk demos + all user apps
-# make build APP=sdk    → build sdk demos only
-# make build APP=myapp  → build that user app only
 build:
 ifdef APP
 ifeq ($(APP),sdk)
@@ -97,16 +87,20 @@ else
 	done
 endif
 
-# ── Exec (UART push + console) ───────────────────────────────────────
-# make exec APP=myapp  → build, push via UART, stream console
+# ── Exec (UART push + console) ──────────────────────────────────────
 exec:
-	@test -n "$(APP)" || { echo "Usage: make exec APP=<app>"; exit 1; }
+ifndef APP
+ifneq ($(APP_NAME),)
+	$(MAKE) -C src/$(APP_NAME) exec
+else
+	@echo "Usage: make exec APP=<app>"
+	@exit 1
+endif
+else
 	$(MAKE) -C src/$(APP) exec
+endif
 
 # ── Deploy ───────────────────────────────────────────────────────────
-# make deploy            → deploy sdk + all user apps to SD card
-# make deploy APP=sdk    → deploy sdk demos only
-# make deploy APP=myapp  → deploy that user app only
 deploy:
 ifdef APP
 ifeq ($(APP),sdk)
@@ -135,7 +129,7 @@ else
 	./scripts/package.sh
 endif
 
-# ── Build host tools ─────────────────────────────────────────────────
+# ── Build host tools ────────────────────────────────────────────────
 tools:
 	$(MAKE) -C src/tools/phdp
 
