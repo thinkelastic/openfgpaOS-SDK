@@ -4,62 +4,43 @@ Build games for the [Analogue Pocket](https://www.analogue.co/pocket) in C or C+
 
 **Hardware:** VexiiRiscv rv32imafc @ 100 MHz, 8 KB I-cache + 32 KB D-cache, 64 MB SDRAM, 320x240 video, 48 kHz stereo audio, 18-channel OPL3 FM synthesis + MIDI playback library.
 
-## Getting Started
+> **New here?** See [GETTING_STARTED.md](GETTING_STARTED.md) — clone to running code in 5 minutes.
 
-### 1. Fork and clone
+## Quick Start
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/openfpgaOS-SDK.git
+git clone https://github.com/ThinkElastic/openfpgaOS-SDK.git
 cd openfpgaOS-SDK
+make setup                    # install RISC-V toolchain
+make core                     # create your app (follow the prompts)
+cd src/mygame
+make                          # build mygame.elf
+make deploy                   # deploy to Pocket SD card
 ```
 
-### 2. Check your toolchain
+### Toolchain
 
-```bash
-./scripts/setup.sh
-```
+`make setup` detects your OS and offers to install automatically:
 
-You need a RISC-V GCC:
 - **Arch:** `pacman -S riscv64-elf-gcc`
+- **Ubuntu/Debian:** `apt install gcc-riscv64-unknown-elf`
+- **Fedora:** `dnf install gcc-riscv64-linux-gnu`
 - **macOS:** `brew install riscv64-elf-gcc`
-- **Ubuntu:** `apt install gcc-riscv64-unknown-elf`
+- **NixOS:** `pkgsCross.riscv64.buildPackages.gcc`
+- **MSYS2:** `pacman -S mingw-w64-ucrt-x86_64-riscv64-unknown-elf-gcc`
 
-### 3. Create your game
-
-```bash
-./scripts/customize.sh
-```
-
-Follow the prompts. This creates:
-- `src/<gamename>/main.c` — a hello world stub to start from
-- `dist/<GameName>/` — the core packaging config
-
-### 4. Build and deploy
-
-```bash
-make               # builds all apps → build/sdk/
-make deploy         # copies to Pocket SD card
-```
-
-### 5. Build PHDP tools (optional)
-
-For UART-based development with a DevKey cartridge:
-
-```bash
-cd src/tools/phdp
-make
-sudo make install   # installs phdpd + phdp to /usr/local/bin
-```
+`make core` prompts for your app name and author, then creates `src/<app>/` with a self-contained Makefile, stub code, and instance JSON. Your app gets its own core identity from the start.
 
 ---
 
-## Writing Your Game
+## Writing Your App
 
-Edit `src/<gamename>/main.c`:
+Edit `src/mygame/main.c`:
 
 ```c
 #include "of.h"
 #include <stdio.h>
+#include <unistd.h>
 
 int main(void) {
     of_video_init();
@@ -77,13 +58,13 @@ int main(void) {
     of_video_flip();
     printf("Hello from openfpgaOS!\n");
 
-    /* Game loop */
+    /* Main loop */
     while (1) {
         of_input_poll();
         if (of_btn_pressed(OF_BTN_A)) {
             /* handle button press */
         }
-        of_delay_ms(16);  /* ~60 fps */
+        usleep(16000);  /* ~60 fps */
     }
 }
 ```
@@ -101,6 +82,8 @@ The OS kernel provides a full C standard library via a jump table. No musl or ne
                       // strcat, strtok, memchr, strspn, strcspn, ...
 #include <math.h>     // sinf, cosf, sqrtf, powf, logf, atan2f, fabsf, ...
 #include <ctype.h>    // toupper, tolower, isalpha, isdigit, isspace, ...
+#include <unistd.h>   // usleep, sleep, open, close, read, write, lseek
+#include <time.h>     // clock_ms, clock_us, clock_gettime
 ```
 
 ### C++ support
@@ -147,6 +130,7 @@ Example (`main.cpp`):
 ```cpp
 #include "of.h"
 #include <stdio.h>
+#include <unistd.h>
 
 class Game {
     int score;
@@ -169,7 +153,7 @@ int main(void) {
     while (1) {
         game.tick();
         game.draw();
-        of_delay_ms(16);
+        usleep(16000);
     }
 }
 ```
@@ -298,6 +282,7 @@ int playing = of_midi_playing();             // Query state
 
 ```c
 #include "of.h"
+#include <unistd.h>
 
 static uint8_t midi_buf[256 * 1024] __attribute__((aligned(512)));
 
@@ -312,7 +297,7 @@ int main(void) {
 
     while (1) {
         of_midi_pump();               // process MIDI events
-        of_delay_ms(1);
+        usleep(1000);
     }
 }
 ```
@@ -362,15 +347,26 @@ uint16_t lt = state.trigger_l;       // Left trigger: 0..65535
 of_input_set_deadzone(4000);          // Stick deadzone (default: 0)
 ```
 
-### Timer — `of_timer.h`
+### Timer — `of_timer.h` / `<time.h>` / `<unistd.h>`
 
-100 MHz hardware timer. Starts at 0 on boot, wraps at ~71 minutes (us) / ~49 days (ms).
+100 MHz hardware timer. Time queries via `<time.h>`, delays via `<unistd.h>`.
 
 ```c
-uint32_t us = of_time_us();           // Microseconds since boot
-uint32_t ms = of_time_ms();           // Milliseconds since boot
-of_delay_us(100);                     // Busy-wait 100 microseconds
-of_delay_ms(16);                      // Busy-wait 16 milliseconds
+#include <time.h>
+uint32_t ms = clock_ms();             // Milliseconds since boot
+uint32_t us = clock_us();             // Microseconds since boot
+
+#include <unistd.h>
+usleep(100);                          // Sleep 100 microseconds
+usleep(16000);                        // Sleep 16 ms (~60 fps frame time)
+sleep(1);                             // Sleep 1 second
+```
+
+**Periodic timer interrupt** (advanced — runs in interrupt context):
+
+```c
+of_timer_set_callback(my_func, 60);   // Call my_func at 60 Hz
+of_timer_stop();                      // Disable callback
 ```
 
 ### File I/O — `of_file.h`
@@ -560,6 +556,45 @@ uint32_t v = of_get_version();     // Runtime API version from kernel
 
 ---
 
+## Instance JSON
+
+Each app has an `instance.json` that maps filenames to data slots. This is the only config file you maintain — all core JSON configs (data.json, audio.json, video.json, etc.) are SDK-owned and deployed automatically.
+
+```json
+{
+    "instance": {
+        "magic": "APF_VER_1",
+        "variant_select": { "id": 666, "select": false },
+        "data_slots": [
+            { "id": 1, "filename": "os.bin" },
+            { "id": 2, "filename": "mygame.elf" },
+            { "id": 3, "filename": "music.mod" },
+            { "id": 10, "filename": "mygame.sav" }
+        ]
+    }
+}
+```
+
+When there's only one instance JSON for your app, the Pocket auto-selects it — no file picker is shown.
+
+### Data Slot Layout
+
+| Slot ID | Name | Purpose |
+|---------|------|---------|
+| 9 | Game | Instance selector (SDK-owned in data.json) |
+| 1 | OS Binary | `os.bin` — loaded by bootloader via DMA |
+| 2 | Application | Your app ELF — loaded by OS kernel |
+| 3-6 | Data 1-4 | App data files (WAD, GRP, images, audio, etc.) |
+| 10-19 | Save 0-9 | Nonvolatile CRAM1 save slots (256 KB each) |
+
+**Rules:**
+- Slot 9 (Game selector) is defined in the SDK's `data.json` — don't add it to your instance
+- Slot 0 is reserved by APF — do not use
+- Save slots use bridge address `0x30000000` (CRAM1) with 256 KB stride
+- Place data files in your app directory — deploy copies them to the SD card
+
+---
+
 ## UART Development (PHDP)
 
 The **Pocket-Host Debug Protocol** streams binaries over UART at 2 Mbaud, bypassing the SD card for rapid iteration. Requires a DevKey cartridge connected via USB-UART adapter.
@@ -606,52 +641,22 @@ phdp logs                           # tail console output
 | `phdp wait` | Block until OS is running |
 | `phdp logs [--last N]` | Tail or show last N lines of console output |
 
+### Building PHDP tools
+
+```bash
+make tools                          # build phdpd + phdp
+cd src/tools/phdp
+sudo make install                   # install to /usr/local/bin
+```
+
 ### Typical dev loop
 
 ```bash
-make firmware                        # rebuild OS
-./scripts/exec.sh build/Assets/openfpgaos/common/os.bin
+make                                # rebuild your app
+./scripts/exec.sh src/mygame/mygame.elf
 ```
 
 `exec.sh` starts the daemon if needed, clears pending slots, pushes the file (auto-detects slot 1 for `os.bin`, slot 2 for app ELFs), resets the core, and streams console output until Ctrl+C.
-
----
-
-## Data Slot Layout
-
-The APF framework uses data slots to map SD card files to bridge memory regions. Your `data.json` defines the layout:
-
-| Slot ID | Name | Purpose |
-|---------|------|---------|
-| 9 | Game | Instance selector (must be first in data.json) |
-| 1 | OS Binary | `os.bin` — loaded by bootloader via DMA |
-| 2 | Application | Your app ELF — loaded by OS kernel |
-| 3-6 | Data 1-4 | App data files (WAD, GRP, images, audio, etc.) |
-| 10-19 | Save 0-9 | Nonvolatile CRAM1 save slots (256 KB each) |
-
-**Rules:**
-- Slot 9 (Game selector) **must be the first entry** in `data.json`
-- Slot 0 is reserved by APF — do not use
-- Save slots use bridge address `0x30000000` (CRAM1) with 256 KB stride
-- Each instance JSON maps which files go into which slots
-
-### Instance JSON example
-
-```json
-{
-    "instance": {
-        "magic": "APF_VER_1",
-        "variant_select": { "id": 666, "select": false },
-        "data_slots": [
-            { "id": 1, "filename": "os.bin" },
-            { "id": 2, "filename": "mygame.elf" },
-            { "id": 3, "filename": "assets.dat" }
-        ]
-    }
-}
-```
-
-Place instance JSONs in `dist/<GameName>/instances/`. Files referenced by the instance go in `Assets/<platform>/common/` on the SD card.
 
 ---
 
@@ -678,83 +683,104 @@ Place instance JSONs in `dist/<GameName>/instances/`. Files referenced by the in
 
 ---
 
+## Multiplatform
+
+The SDK is designed for multiple hardware targets. Platform-specific logic — JSON templates, deploy scripts, directory layout — lives in `src/sdk/platforms/<target>/`.
+
+```
+src/sdk/platforms/
+├── pocket/                  ← Analogue Pocket (current)
+│   ├── templates/*.json     ← APF JSON config templates
+│   └── deploy.sh            ← SD card deploy script
+└── mister/                  ← MiSTer FPGA (planned)
+    ├── templates/            ← MiSTer-specific configs
+    └── deploy.sh             ← MiSTer deploy script
+```
+
+Your C code is the same across all platforms. When creating an app:
+
+```bash
+make core                               # default: pocket
+make core --target mister              # future: MiSTer
+```
+
+---
+
+## Makefile Targets
+
+### From your app directory (`src/<app>/`)
+
+| Command | What it does |
+|---------|-------------|
+| `make` | Build your app |
+| `make exec` | Build, push via UART, stream console |
+| `make deploy` | Deploy to Pocket SD card |
+| `make package` | Package core into a ZIP |
+| `make pc` | Build SDL2 desktop version |
+| `make clean` | Remove build artifacts |
+
+### From the demos directory (`src/apps/`)
+
+| Command | What it does |
+|---------|-------------|
+| `make` | Build all demos |
+| `make new APP=demo` | Create a new demo app |
+| `make deploy` | Deploy SDK + demos to SD card |
+| `make package` | Package SDK core into a ZIP |
+| `make clean` | Remove build artifacts |
+
+### From the repo root
+
+| Command | What it does |
+|---------|-------------|
+| `make setup` | Install RISC-V toolchain |
+| `make core` | Create your app (interactive) |
+| `make build` | Build everything |
+| `make build APP=<app>` | Build sdk or a specific app |
+| `make exec APP=<app>` | Build, push via UART, stream console |
+| `make deploy` | Deploy everything to SD card |
+| `make deploy APP=<app>` | Deploy sdk or a specific app |
+| `make tools` | Build PHDP host tools |
+| `make package` | Package all cores into ZIPs |
+| `make clean` | Remove all build artifacts |
+
+---
+
 ## Scripts
 
 | Script | What it does |
 |--------|-------------|
-| `scripts/setup.sh` | Checks RISC-V toolchain is installed |
-| `scripts/customize.sh` | Creates a new game: stub source + core config |
-| `scripts/deploy.sh` | Copies `build/sdk/` to the Pocket SD card |
-| `scripts/package.sh` | ZIPs a game core for distribution |
+| `scripts/setup.sh` | Detects OS, installs RISC-V toolchain |
+| `scripts/new.sh` | Creates a new app (Makefile, main.c, instance.json) |
+| `scripts/customize.sh` | Creates a standalone core for distribution (interactive) |
+| `scripts/deploy.sh` | Deploys full SDK release to Pocket SD card |
+| `scripts/package.sh` | ZIPs a core for distribution |
 | `scripts/exec.sh` | Push binary via UART, reset core, stream output |
 
-**PHDP tools** (in `src/tools/phdp/`):
+---
 
-| Tool | What it does |
-|------|-------------|
-| `phdpd` | Background daemon — owns UART, manages PHDP protocol |
-| `phdp` | CLI client — push binaries, reset, tail logs |
+## Packaging for Distribution
 
-### Packaging a standalone game
+When your app is ready to ship as its own Pocket menu entry:
 
-After `customize.sh`, your game can be packaged as its own Pocket menu entry:
+### Packaging and distribution
 
 ```bash
-./scripts/package.sh GameName      # creates releases/GameName.zip
+make                                   # build
+./scripts/package.sh MyGame            # creates releases/MyGame-v1.0.0.zip
 ```
 
 Users extract the ZIP to their SD card root.
 
 ---
 
-## Creating Your Own Game Repo
+## Porting Existing Apps
 
-When your game is ready for its own repository:
+For larger ports (Duke Nukem, Doom, etc.) that carry their own build system:
 
-### 1. Create a new repo from the SDK
-
-```bash
-git clone https://github.com/ThinkElastic/openfpgaOS-SDK.git MyGame
-cd MyGame
-./scripts/customize.sh    # creates game config + renames origin to sdk-upstream
-git remote add origin git@github.com:YOU/MyGame.git
-```
-
-`customize.sh` automatically renames `origin` to `sdk-upstream` so you can track SDK updates while using `origin` for your own repo.
-
-### 2. Develop your game
-
-Edit `src/<gamename>/main.c`, add source files, build with `make`.
-
-Your game source lives in `src/<gamename>/` — SDK files live in `src/sdk/`, `src/apps/`, `dist/sdk/`. They don't overlap.
-
-### 3. Pull SDK updates
-
-```bash
-git fetch sdk-upstream
-git merge sdk-upstream/main
-make clean && make
-```
-
-Only SDK-owned files change. Your game files won't conflict.
-
-### 4. Package and distribute
-
-```bash
-make                          # build everything
-./scripts/package.sh                  # ZIPs SDK core + your standalone core
-./scripts/package.sh <GameName>       # ZIP just your standalone core
-```
-
----
-
-## Porting Existing Games
-
-For larger ports (Duke Nukem, Doom, etc.), games carry their own copy of the SDK headers and link against the OS jump table:
-
-1. Copy `src/sdk/include/` and `src/sdk/libc/` into your game repo as `sdk/`
+1. Copy `src/sdk/include/` and `src/sdk/libc/` into your repo as `sdk/`
 2. Copy `src/sdk/crt/start.S` and `src/sdk/crt/app.ld`
-3. Write a `posix_shim.c` with game-specific stubs
+3. Write a `posix_shim.c` with app-specific stubs
 4. Use `sdk/of_posix.c` for POSIX I/O (`open`/`read`/`write`/`lseek`)
 5. Register data files: `of_file_slot_register(3, "game.grp")`
 
@@ -766,9 +792,13 @@ For larger ports (Duke Nukem, Doom, etc.), games carry their own copy of the SDK
 
 ```
 openfpgaOS-SDK/
-├── Makefile              <- YOUR build config
+├── Makefile              <- Top-level: setup, new, demos, release
+├── GETTING_STARTED.md    <- Quick start guide for developers
 ├── src/
-│   ├── <gamename>/       <- YOUR game source (created by customize.sh)
+│   ├── <mygame>/         <- YOUR app (created by make core)
+│   │   ├── Makefile      <- Self-contained: build, deploy, package
+│   │   ├── main.c        <- Your code
+│   │   └── instance.json <- Data slot mapping (only config you maintain)
 │   ├── apps/             <- Bundled example apps (SDK-owned)
 │   │   ├── bramdemo/     <- BRAM hot-path benchmarking
 │   │   ├── celeste/      <- Full game example
@@ -776,7 +806,7 @@ openfpgaOS-SDK/
 │   │   ├── cray/         <- Real-time C raytracer
 │   │   ├── cxxdemo/      <- C++ classes, templates, iostream
 │   │   ├── fbdemo/       <- PNG framebuffer display
-│   │   ├── memdemo/     <- memset/memcpy throughput benchmark
+│   │   ├── memdemo/      <- memset/memcpy throughput benchmark
 │   │   ├── interactdemo/ <- Pocket menu variables
 │   │   ├── mididemo/     <- MIDI playback (of_midi library, 18-ch OPL3)
 │   │   ├── savea/        <- Save slot integrity test
@@ -788,27 +818,42 @@ openfpgaOS-SDK/
 │       ├── include/      <- openfpgaOS API headers
 │       ├── libc/         <- C standard library wrappers
 │       ├── crt/          <- Startup code + linker script
+│       ├── platforms/    <- Platform templates & deploy scripts
+│       │   └── pocket/   <- Analogue Pocket target
 │       └── pc/           <- SDL2 shim for desktop builds
-├── dist/
-│   ├── sdk/              <- Shared openfpgaOS core configs (SDK-owned)
-│   └── <GameName>/       <- YOUR standalone core (from customize.sh)
+├── dist/sdk/             <- SDK core configs (deployed as-is, SDK-owned)
+│   ├── core/             <- core.json, data.json, audio.json, ...
+│   ├── platform/         <- Platform metadata
+│   └── instances/        <- Instance JSONs for bundled apps
 ├── scripts/              <- Build/deploy/packaging scripts (SDK-owned)
-├── runtime/              <- FPGA bitstream, OS binary, loader (SDK-owned)
-└── build/                <- Build output (gitignored)
+└── runtime/              <- FPGA bitstream, OS binary, loader (SDK-owned)
 ```
 
 ### What you change vs. what the SDK owns
 
-| Yours (edit freely) | SDK-owned (updated via merge) |
-|---------------------|-------------------------------|
-| `Makefile` | `src/sdk/` |
-| `src/<gamename>/` | `src/apps/` |
-| `dist/<GameName>/` | `dist/sdk/` |
-| `.gitignore` | `runtime/` |
+| Yours (edit freely) | SDK-owned (updated via git pull) |
+|---------------------|----------------------------------|
+| `src/<mygame>/main.c` | `src/sdk/` |
+| `src/<mygame>/instance.json` | `src/apps/` |
+| | `dist/sdk/` |
+| | `runtime/` |
 | | `scripts/` |
+
+Core JSON configs live in `dist/sdk/` and are deployed directly to the SD card. When the SDK updates them, you get the changes automatically — no regeneration needed.
+
+---
+
+## Updating the SDK
+
+```bash
+git pull                              # or: git fetch sdk-upstream && git merge sdk-upstream/main
+make clean && make                    # rebuild
+```
+
+SDK-owned files (headers, core configs, runtime, templates) update automatically. Your app source and instance.json are never touched.
 
 ---
 
 ## Reference
 
-This SDK builds apps for [openfpgaOS](https://github.com/ThinkElastic/openfpgaOS) — a RISC-V operating system running on the Analogue Pocket's Cyclone V FPGA. See the openfpgaOS repo for architecture details, FPGA design, and OS internals.
+This SDK builds apps for [openfpgaOS](https://github.com/ThinkElastic/openfpgaOS) — a RISC-V operating system running on the Analogue Pocket's Cyclone V FPGA. The openfpgaOS repo is the source of truth for API headers and the OS kernel. See that repo for architecture details, FPGA design, and OS internals.

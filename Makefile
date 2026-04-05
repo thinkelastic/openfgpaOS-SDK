@@ -1,90 +1,160 @@
 # openfpgaOS SDK Makefile
 #
-# Usage:
-#   make              Build all apps, create release/
-#   make deploy       Copy release/ to Pocket SD card
-#   make clean        Remove all build artifacts
-#   make core         Build a standalone game core (interactive)
-#   make package      Package game core into a ZIP
+# Quick start:
+#   make setup        Install RISC-V toolchain
+#   make core         Create your app
+#
+# Then from src/<app>/:
+#   make              Build
+#   make deploy       Deploy to Pocket SD card
+#   make pc           Test on desktop (SDL2)
 
-# ── Paths ────────────────────────────────────────────────────────
+# ── Paths ────────────────────────────────────────────────────────────
 CORE_ID      = ThinkElastic.openfpgaOS
 PLATFORM     = openfpgaos
-RELEASE      = build/sdk
-REL_CORE     = $(RELEASE)/Cores/$(CORE_ID)
-REL_ASSETS   = $(RELEASE)/Assets/$(PLATFORM)/common
-REL_INSTANCE = $(RELEASE)/Assets/$(PLATFORM)/$(CORE_ID)
-REL_PLATFORM = $(RELEASE)/Platforms
 RUNTIME      = runtime
 
-# ── Default target ───────────────────────────────────────────────
-all: apps tools release
+# ── Detect user apps (src/<name>/ excluding apps/, sdk/, tools/) ─────
+USER_APPS := $(shell for d in src/*/; do \
+	[ "$$d" = "src/apps/" ] || [ "$$d" = "src/sdk/" ] || [ "$$d" = "src/tools/" ] && continue; \
+	[ -f "$$d/Makefile" ] && basename "$$d"; \
+done)
 
-# ── Build all bundled apps ───────────────────────────────────────
-apps:
+# ── Default target ───────────────────────────────────────────────────
+all: help
+
+# ── Help ─────────────────────────────────────────────────────────────
+help:
+	@echo "         ___  ___  ___ ___"
+	@echo "        / _ \\/ _ \\/ -_) _ \\"
+	@echo "        \\___/ .__/\\__/_//_/"
+	@echo "       ____/_/  ________"
+	@echo "      / __/ _ \\/ ___/ _ |"
+	@echo "     / _// ___/ (_ / __ |"
+	@echo "    /_/_/_/___\\___/_/ |_|"
+	@echo "   / __ \\/ __/"
+	@echo "  / /_/ /\\ \\"
+	@echo "  \\____/___/  SDK"
+	@echo ""
+	@echo "  Getting started:"
+	@echo "    make setup            Install RISC-V toolchain"
+	@echo "    make core             Create your app"
+	@echo ""
+	@echo "  Then work from your app directory:"
+	@echo "    cd src/<app>"
+	@echo "    make                  Build"
+	@echo "    make exec             Build, push via UART, stream console"
+	@echo "    make deploy           Deploy to Pocket SD card"
+	@echo "    make package          Package core into a ZIP"
+	@echo "    make pc               Test on desktop (SDL2)"
+	@echo "    make clean            Remove build artifacts"
+	@echo ""
+	@echo "  To work with the demo apps:"
+	@echo "    cd src/apps"
+	@echo "    make                  Build all demos"
+	@echo "    make new APP=demo     Create a new demo app"
+	@echo "    make package          Package SDK core into a ZIP"
+	@echo "    make deploy           Deploy SDK + demos to SD card"
+	@echo "    make clean            Remove build artifacts"
+	@echo ""
+	@echo "  From the root:"
+	@echo "    make build            Build everything"
+	@echo "    make build APP=<app>  Build sdk or <app>"
+	@echo "    make exec APP=<app>   Build, push via UART, stream console"
+	@echo "    make deploy           Deploy everything to SD card"
+	@echo "    make deploy APP=<app> Deploy sdk or <app> to SD card"
+	@echo "    make tools            Build PHDP host tools"
+	@echo "    make package          Package all cores into ZIPs"
+	@echo "    make clean            Remove all build artifacts"
+
+# ── Setup ────────────────────────────────────────────────────────────
+setup:
+	@./scripts/setup.sh
+
+# ── Create your app ──────────────────────────────────────────────────
+core:
+	@./scripts/customize.sh
+
+# ── Build ────────────────────────────────────────────────────────────
+# make build            → build sdk demos + all user apps
+# make build APP=sdk    → build sdk demos only
+# make build APP=myapp  → build that user app only
+build:
+ifdef APP
+ifeq ($(APP),sdk)
 	$(MAKE) -C src/apps
-	@# Also build standalone games in src/<name>/ (created by customize.sh)
+else
+	$(MAKE) -C src/$(APP)
+endif
+else
+	$(MAKE) -C src/apps
 	@for d in src/*/; do \
-		[ "$$d" = "src/apps/" ] || [ "$$d" = "src/sdk/" ] && continue; \
-		[ -f "$$d/main.c" ] || [ -f "$$d/of_main.c" ] || continue; \
+		[ "$$d" = "src/apps/" ] || [ "$$d" = "src/sdk/" ] || [ "$$d" = "src/tools/" ] && continue; \
+		[ -f "$$d/Makefile" ] || continue; \
 		name=$$(basename "$$d"); \
-		echo "Building standalone: $$name..."; \
-		$(MAKE) -C "$$d" -f $(CURDIR)/src/apps/app.mk SDK_DIR=$(CURDIR)/src/sdk || exit 1; \
-		[ -f "$$d/app.elf" ] && mv "$$d/app.elf" "$$d/$$name.elf" 2>/dev/null; \
+		echo "Building $$name..."; \
+		$(MAKE) -C "$$d" || exit 1; \
 	done
+endif
 
-# ── Create release/ directory ────────────────────────────────────
-release: apps
-	@echo "Creating release/..."
-	@mkdir -p $(REL_CORE) $(REL_ASSETS) $(REL_INSTANCE) $(REL_PLATFORM)/_images
-	@# Core: bitstream + loader
-	@cp $(RUNTIME)/bitstream.rbf_r $(REL_CORE)/
-	@cp $(RUNTIME)/loader.bin $(REL_CORE)/
-	@# Core: JSON configs + icon (from dist/sdk/ if present)
-	@[ -d dist/sdk/core ] && cp dist/sdk/core/*.json dist/sdk/core/*.bin $(REL_CORE)/ 2>/dev/null || true
-	@# Platform
-	@[ -d dist/sdk/platform ] && cp dist/sdk/platform/*.json $(REL_PLATFORM)/ 2>/dev/null || true
-	@[ -d dist/sdk/platform/_images ] && cp dist/sdk/platform/_images/*.bin $(REL_PLATFORM)/_images/ 2>/dev/null || true
-	@# OS binary
-	@cp $(RUNTIME)/os.bin $(REL_ASSETS)/
-	@# Bundled apps + data files
-	@for d in src/apps/*/; do \
-		name=$$(basename "$$d"); \
-		[ -f "$$d/app.elf" ] && cp "$$d/app.elf" "$(REL_ASSETS)/$$name.elf" || true; \
-		find "$$d" -maxdepth 1 \( -name "*.mid" -o -name "*.wav" -o -name "*.dat" -o -name "*.png" \) \
-			-exec cp {} "$(REL_ASSETS)/" \; 2>/dev/null || true; \
-	done
-	@# Standalone games (src/<name>/<name>.elf)
+# ── Exec (UART push + console) ───────────────────────────────────────
+# make exec APP=myapp  → build, push via UART, stream console
+exec:
+	@test -n "$(APP)" || { echo "Usage: make exec APP=<app>"; exit 1; }
+	$(MAKE) -C src/$(APP) exec
+
+# ── Deploy ───────────────────────────────────────────────────────────
+# make deploy            → deploy sdk + all user apps to SD card
+# make deploy APP=sdk    → deploy sdk demos only
+# make deploy APP=myapp  → deploy that user app only
+deploy:
+ifdef APP
+ifeq ($(APP),sdk)
+	$(MAKE) -C src/apps deploy
+else
+	$(MAKE) -C src/$(APP) deploy
+endif
+else
+	$(MAKE) -C src/apps deploy
 	@for d in src/*/; do \
-		[ "$$d" = "src/apps/" ] || [ "$$d" = "src/sdk/" ] && continue; \
-		name=$$(basename "$$d"); \
-		[ -f "$$d/$$name.elf" ] && cp "$$d/$$name.elf" "$(REL_ASSETS)/" || true; \
-		find "$$d" -maxdepth 1 \( -name "*.mid" -o -name "*.wav" -o -name "*.dat" -o -name "*.png" \) \
-			-exec cp {} "$(REL_ASSETS)/" \; 2>/dev/null || true; \
+		[ "$$d" = "src/apps/" ] || [ "$$d" = "src/sdk/" ] || [ "$$d" = "src/tools/" ] && continue; \
+		[ -f "$$d/Makefile" ] || continue; \
+		$(MAKE) -C "$$d" deploy || true; \
 	done
-	@# Instance JSONs
-	@[ -d dist/sdk/instances ] && cp dist/sdk/instances/*.json $(REL_INSTANCE)/ 2>/dev/null || true
-	@echo "Release ready: $(RELEASE)/"
+endif
 
-# ── Deploy to SD card ────────────────────────────────────────────
-deploy: all
-	@./scripts/deploy.sh
+# ── Package ──────────────────────────────────────────────────────────
+package:
+ifdef APP
+ifeq ($(APP),sdk)
+	$(MAKE) -C src/apps package
+else
+	$(MAKE) -C src/$(APP) package
+endif
+else
+	./scripts/package.sh
+endif
 
-# ── Build host tools ─────────────────────────────────────────────
+# ── Build host tools ─────────────────────────────────────────────────
 tools:
 	$(MAKE) -C src/tools/phdp
 
-# ── Clean ────────────────────────────────────────────────────────
+# ── Clean ────────────────────────────────────────────────────────────
 clean:
+ifdef APP
+ifeq ($(APP),sdk)
+	$(MAKE) -C src/apps clean
+else
+	$(MAKE) -C src/$(APP) clean
+endif
+else
 	$(MAKE) -C src/apps clean
 	$(MAKE) -C src/tools/phdp clean
-	rm -rf build releases
+	@for d in src/*/; do \
+		[ "$$d" = "src/apps/" ] || [ "$$d" = "src/sdk/" ] || [ "$$d" = "src/tools/" ] && continue; \
+		[ -f "$$d/Makefile" ] && $(MAKE) -C "$$d" clean; \
+	done
+	rm -rf build .obj releases
+endif
 
-# ── Core packaging ───────────────────────────────────────────────
-core:
-	./scripts/customize.sh
-
-package:
-	./scripts/package.sh
-
-.PHONY: all apps tools release deploy clean core package
+.PHONY: all help setup core build exec deploy package tools clean
