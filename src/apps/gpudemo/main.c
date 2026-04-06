@@ -88,9 +88,15 @@ static void set_palette(void) {
  * Span Demo: Doom-style textured walls + floor
  * ================================================================ */
 static void draw_span_demo(int frame) {
-    uint32_t fb_addr = (uint32_t)(uintptr_t)of_video_surface();
+    uint8_t *fb = of_video_surface();
+    uint32_t fb_addr = (uint32_t)(uintptr_t)fb;
     uint32_t tex_addr = (uint32_t)(uintptr_t)wall_tex;
     uint32_t floor_addr = (uint32_t)(uintptr_t)checkerboard_tex;
+
+    /* Invalidate CPU D-cache for the framebuffer — the GPU writes
+     * directly to SDRAM, so stale dirty cache lines would overwrite
+     * the GPU's pixels when they eventually evict. */
+    OF_SVC->cache_inval_range(fb, SCREEN_W * SCREEN_H);
 
     of_gpu_set_framebuffer(fb_addr, SCREEN_W);
     of_gpu_clear(OF_GPU_CLEAR_COLOR, 0x10, 0);
@@ -167,7 +173,10 @@ static uint8_t __attribute__((section(".sdram")))
     face_tex[6] __attribute__((aligned(4)));
 
 static void draw_triangle_demo(int frame) {
-    uint32_t fb_addr = (uint32_t)(uintptr_t)of_video_surface();
+    uint8_t *fb = of_video_surface();
+    uint32_t fb_addr = (uint32_t)(uintptr_t)fb;
+
+    OF_SVC->cache_inval_range(fb, SCREEN_W * SCREEN_H);
 
     of_gpu_set_framebuffer(fb_addr, SCREEN_W);
     of_gpu_clear(OF_GPU_CLEAR_COLOR, 0x08, 0);
