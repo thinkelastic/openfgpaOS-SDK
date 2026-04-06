@@ -1,64 +1,16 @@
 /*
- * of_gpu.h -- 3D Accelerator API for openfpgaOS
+ * of_gpu.h -- Hardware GPU Accelerator API for openfpgaOS
  *
- * Hardware-accelerated triangle rasterizer with span fast-path.
- * Designed for porting 90s-era 3D games: Quake, Quake2, Duke3D,
- * Doom, Super Mario 64, Half-Life, Descent, Wipeout.
+ * Asynchronous span + triangle rasteriser.  CPU submits commands to a
+ * 16 KB ring buffer in GPU-internal M10K BRAM; the GPU processes them
+ * in parallel, writing pixels to the framebuffer via AXI4.
  *
- * Architecture:
- *   CPU writes commands into a ring buffer in SDRAM.
- *   GPU reads via DMA and processes independently.
- *   CPU and GPU run in parallel — fire and forget.
+ * Ring buffer: 16 KB in M10K (no cache coherence issues).
+ * CPU writes ring data via MMIO (GPU_RING_DATA, auto-increment).
+ * CPU kicks GPU by writing GPU_RING_WRPTR.
  *
- * Two drawing primitives:
- *   - Triangles: screen-space vertices with texture coords, color, depth.
- *     Supports affine and perspective-correct texturing.
- *   - Spans: pre-rasterized horizontal/vertical pixel runs.
- *     Fast-path for Doom/Duke3D/Quake-style engines that already
- *     generate spans. Bypasses triangle setup entirely.
- *
- * Textures:
- *   8-bit indexed (palette lookup via colormap BRAM) or 16-bit RGB565.
- *   Colormap BRAM enables the classic light×texel→color lookup used by
- *   Doom, Duke3D, Quake, and Descent without burning SDRAM bandwidth.
- *
- * Depth:
- *   16-bit Z-buffer in SRAM. Per-command enable/disable.
- *
- * Sync:
- *   Fence tokens for CPU-GPU synchronization. Poll or wait.
- *
- * Resource budget: ~5K ALMs, 64 M10K blocks, ~6 DSP blocks.
- *
- * Example — triangle-based game (SM64, Wipeout):
- *
- *   of_gpu_init();
- *   while (1) {
- *       of_gpu_clear(OF_GPU_CLEAR_COLOR | OF_GPU_CLEAR_DEPTH, 0, 0xFFFF);
- *       of_gpu_bind_texture(&level_tex);
- *       of_gpu_depth_test(OF_GPU_DEPTH_LESS);
- *       of_gpu_draw_triangles(verts, tri_count * 3);
- *       uint32_t fence = of_gpu_fence();
- *       of_gpu_kick();
- *       // ... game logic, audio, input while GPU works ...
- *       of_gpu_wait(fence);
- *       of_video_flip();
- *   }
- *
- * Example — span-based game (Doom, Duke3D):
- *
- *   of_gpu_init();
- *   of_gpu_colormap_upload(palette_lookup, 16384);
- *   while (1) {
- *       // Engine generates spans as usual
- *       of_gpu_draw_span(&floor_span);
- *       of_gpu_draw_span(&wall_column);
- *       uint32_t fence = of_gpu_fence();
- *       of_gpu_kick();
- *       // ... BSP traversal, game logic ...
- *       of_gpu_wait(fence);
- *       of_video_flip();
- *   }
+ * IMPORTANT: This header contains static mutable state (_gpu_wrptr, etc).
+ * Include it from exactly ONE translation unit per program.
  */
 
 #ifndef OF_GPU_H
@@ -69,271 +21,353 @@ extern "C" {
 #endif
 
 #include <stdint.h>
-#include <stdbool.h>
+#include <string.h>
 
-/* ======================================================================
+/* ================================================================
  * Constants
- * ====================================================================== */
+ * ================================================================ */
 
-/* Clear flags (bitmask) */
 #define OF_GPU_CLEAR_COLOR      (1 << 0)
 #define OF_GPU_CLEAR_DEPTH      (1 << 1)
 
-/* Depth test functions */
+#define OF_GPU_RING_SIZE        16384   /* 16 KB M10K BRAM ring */
+
+/* Fixed-point helpers */
+#define OF_GPU_FIXED_16_16(x)   ((int32_t)((x) * 65536))   /* float → 16.16 */
+#define OF_GPU_SUBPIXEL(x)      ((int16_t)((x) * 16))       /* pixel → 12.4  */
+#define OF_GPU_FP16(x)          OF_GPU_FIXED_16_16(x)
+#define OF_GPU_SC(x)            OF_GPU_SUBPIXEL(x)
+
+/* ================================================================
+ * Enumerations
+ * ================================================================ */
+
 typedef enum {
-    OF_GPU_DEPTH_NONE   = 0,    /* Disabled — no read, no write */
-    OF_GPU_DEPTH_ALWAYS = 1,    /* Always pass, write Z */
-    OF_GPU_DEPTH_LESS   = 2,    /* Pass if fragment Z < buffer Z */
-    OF_GPU_DEPTH_LEQUAL = 3,    /* Pass if fragment Z <= buffer Z */
-    OF_GPU_DEPTH_EQUAL  = 4,    /* Pass if fragment Z == buffer Z */
+    OF_GPU_DEPTH_NONE   = 0,
+    OF_GPU_DEPTH_ALWAYS = 1,
+    OF_GPU_DEPTH_LESS   = 2,
+    OF_GPU_DEPTH_LEQUAL = 3,
+    OF_GPU_DEPTH_EQUAL  = 4,
 } of_gpu_depth_func_t;
 
-/* Blend modes */
 typedef enum {
-    OF_GPU_BLEND_NONE    = 0,   /* Opaque write */
-    OF_GPU_BLEND_ALPHA   = 1,   /* Skip pixel if alpha test fails */
-    OF_GPU_BLEND_ADD     = 2,   /* Additive (for future expansion) */
+    OF_GPU_BLEND_NONE  = 0,
+    OF_GPU_BLEND_ALPHA = 1,
+    OF_GPU_BLEND_ADD   = 2,
 } of_gpu_blend_t;
 
-/* Texture formats */
 typedef enum {
-    OF_GPU_TEXFMT_I8     = 0,   /* 8-bit indexed → colormap BRAM lookup */
-    OF_GPU_TEXFMT_RGB565 = 1,   /* 16-bit direct color */
+    OF_GPU_TEXFMT_I8     = 0,
+    OF_GPU_TEXFMT_RGB565 = 1,
 } of_gpu_texfmt_t;
 
-/* Texture wrap modes */
 typedef enum {
-    OF_GPU_WRAP_REPEAT = 0,     /* Tile (power-of-2 mask) */
-    OF_GPU_WRAP_CLAMP  = 1,     /* Clamp to edge */
+    OF_GPU_WRAP_REPEAT = 0,
+    OF_GPU_WRAP_CLAMP  = 1,
 } of_gpu_wrap_t;
 
-/* Span flags (bitmask) */
-#define OF_GPU_SPAN_COLORMAP    (1 << 0)  /* Apply colormap BRAM lookup */
-#define OF_GPU_SPAN_COLUMN      (1 << 1)  /* Vertical (stride-based advance) */
-#define OF_GPU_SPAN_SKIP_ZERO   (1 << 2)  /* Skip transparent texels (index 0 or 255) */
-#define OF_GPU_SPAN_DEPTH_TEST  (1 << 3)  /* Z-test per pixel */
-#define OF_GPU_SPAN_DEPTH_WRITE (1 << 4)  /* Write Z per pixel */
-#define OF_GPU_SPAN_PERSP       (1 << 5)  /* Perspective-correct subdivision */
+/* ================================================================
+ * Span Flags
+ * ================================================================ */
 
-/* ======================================================================
- * Vertex format
- *
- * Screen-space: CPU does all transforms, GPU does rasterize + shade.
- * Coordinates are 12.4 fixed-point for sub-pixel precision.
- * Texture coords are 16.16 fixed-point.
- * ====================================================================== */
+#define OF_GPU_SPAN_COLORMAP    (1 << 0)
+#define OF_GPU_SPAN_COLUMN      (1 << 1)
+#define OF_GPU_SPAN_SKIP_ZERO   (1 << 2)
+#define OF_GPU_SPAN_DEPTH_TEST  (1 << 3)
+#define OF_GPU_SPAN_DEPTH_WRITE (1 << 4)
+#define OF_GPU_SPAN_PERSP       (1 << 5)
+
+/* ================================================================
+ * Data Structures
+ * ================================================================ */
+
+typedef struct {
+    uint32_t fb_addr;
+    uint32_t tex_addr;
+    int32_t  s, t;
+    int32_t  sstep, tstep;
+    uint16_t count;
+    uint8_t  light;
+    uint8_t  flags;
+    int16_t  fb_stride;
+    uint16_t tex_width;
+    uint8_t  tex_shift;
+    uint8_t  tex_bits;
+    uint32_t z_addr;
+    int32_t  zi;
+    int32_t  zistep;
+    /* Perspective (optional, requires PERSP flag) */
+    int32_t  sdivz, tdivz;
+    int32_t  zi_persp;
+    int32_t  sdivz_step, tdivz_step;
+    int32_t  zi_step;
+} of_gpu_span_t;
+
+typedef struct {
+    uint32_t        addr;
+    uint16_t        width;
+    uint16_t        height;
+    of_gpu_texfmt_t format;
+    of_gpu_wrap_t   wrap_s;
+    of_gpu_wrap_t   wrap_t;
+} of_gpu_texture_t;
 
 typedef struct {
     int16_t  x, y;          /* Screen position, 12.4 fixed-point */
-    uint16_t z;             /* Depth, 16-bit (0 = near, 0xFFFF = far) */
-    uint16_t pad;           /* Alignment */
-    int32_t  s, t;          /* Texture coords, 16.16 fixed-point */
-    int32_t  w;             /* 1/W for perspective correction, 16.16 */
-                            /* Set to 0x00010000 (1.0) for affine */
-    uint8_t  r, g, b, a;   /* Vertex color / light level */
-} of_gpu_vertex_t;          /* 24 bytes */
+    uint16_t z;             /* Depth: 0 = near, 0xFFFF = far */
+    uint16_t pad;
+    int32_t  s, t;          /* Texture coordinates, 16.16 fixed-point */
+    int32_t  w;             /* 1/W for perspective (0x10000 = affine) */
+    uint8_t  r, g, b, a;   /* Vertex color / light / alpha */
+} of_gpu_vertex_t;          /* 24 bytes = 6 words */
 
-/* ======================================================================
- * Texture descriptor
- * ====================================================================== */
+/* ================================================================
+ * MMIO Registers
+ * ================================================================ */
 
-typedef struct {
-    uint32_t          addr;         /* SDRAM byte address of texel data */
-    uint16_t          width;        /* Texels (must be power of 2) */
-    uint16_t          height;       /* Texels (must be power of 2) */
-    of_gpu_texfmt_t   format;       /* Texel format */
-    of_gpu_wrap_t     wrap_s;       /* Horizontal wrap */
-    of_gpu_wrap_t     wrap_t;       /* Vertical wrap */
-} of_gpu_texture_t;
+#ifndef OF_PC
 
-/* ======================================================================
- * Span descriptor (fast-path for Doom/Duke3D/Quake span engines)
+#define OF_GPU_BASE             0x4A000000
+#define OF_GPU_REG(off)         (*(volatile uint32_t *)(OF_GPU_BASE + (off)))
+
+#define GPU_CTRL                OF_GPU_REG(0x00)  /* W: bit0=enable, bit1=soft_reset, bit2=ring_reset */
+#define GPU_RING_WRPTR          OF_GPU_REG(0x04)  /* W: CPU write pointer (byte offset) — kicks GPU */
+#define GPU_RING_DATA           OF_GPU_REG(0x08)  /* W: write next word to ring BRAM (auto-increment) */
+#define GPU_RING_RDPTR          OF_GPU_REG(0x10)  /* R: GPU read pointer */
+#define GPU_STATUS              OF_GPU_REG(0x14)  /* R: {30'b0, ring_empty, busy} */
+#define GPU_FENCE_REACHED       OF_GPU_REG(0x18)  /* R: last completed fence token */
+#define GPU_STAT_PIXELS         OF_GPU_REG(0x1C)  /* R: pixel counter */
+#define GPU_CMAP_ADDR           OF_GPU_REG(0x20)  /* W: colormap write address (auto-inc) */
+#define GPU_CMAP_DATA           OF_GPU_REG(0x24)  /* W: colormap write data (byte) */
+#define GPU_TEX_FLUSH           OF_GPU_REG(0x28)  /* W: flush texture cache */
+#define GPU_STAT_SPANS          OF_GPU_REG(0x2C)  /* R: span counter */
+
+/* ================================================================
+ * Command IDs
+ * ================================================================ */
+
+#define GPU_CMD_NOP             0x01
+#define GPU_CMD_FENCE           0x02
+#define GPU_CMD_CLEAR           0x10
+#define GPU_CMD_SET_TEXTURE     0x20
+#define GPU_CMD_SET_DEPTH_FUNC  0x21
+#define GPU_CMD_SET_BLEND       0x22
+#define GPU_CMD_SET_FB          0x23
+#define GPU_CMD_SET_ZB          0x24
+#define GPU_CMD_SET_SHADE       0x25
+#define GPU_CMD_SET_ALPHA_REF   0x26
+#define GPU_CMD_DRAW_TRIANGLES  0x30
+#define GPU_CMD_DRAW_INDEXED    0x31
+#define GPU_CMD_DRAW_SPAN       0x40
+#define GPU_CMD_DRAW_SPANS      0x41
+
+/* ================================================================
+ * Ring Buffer State (app-side)
  *
- * Bypasses triangle setup. The CPU provides pre-computed per-pixel
- * stepping parameters directly, just like PocketQuake's MMIO interface.
- * ====================================================================== */
+ * Static mutable — include this header from one .c file only.
+ * ================================================================ */
 
-typedef struct {
-    uint32_t fb_addr;       /* Framebuffer destination byte address */
-    uint32_t tex_addr;      /* Texture base byte address in SDRAM */
-    int32_t  s, t;          /* Initial tex coords, 16.16 fixed-point */
-    int32_t  sstep, tstep;  /* Per-pixel tex coord step, 16.16 */
-    uint16_t count;         /* Number of pixels */
-    uint8_t  light;         /* Light/shade level (colormap row index) */
-    uint8_t  flags;         /* OF_GPU_SPAN_* bitmask */
-    int16_t  fb_stride;     /* FB advance per pixel (1=horiz, 320=column) */
-    /* Texture addressing mode (selects between multiply and shift) */
-    uint16_t tex_width;     /* Quake: t * width + s (multiply mode) */
-    uint8_t  tex_shift;     /* Duke3D/Doom: (t >> shift) << bits | ... */
-    uint8_t  tex_bits;      /* Duke3D/Doom: bit-combine width */
-    /* Optional: depth buffer */
-    uint32_t z_addr;        /* Z-buffer start address (SRAM) */
-    int32_t  zi;            /* Initial 1/Z, fixed-point */
-    int32_t  zistep;        /* Per-pixel 1/Z step */
-    /* Optional: perspective correction (Quake-style 16px subdivision) */
-    int32_t  sdivz, tdivz;  /* S/Z, T/Z at span start */
-    int32_t  zi_persp;      /* 1/Z at span start */
-    int32_t  sdivz_step;    /* S/Z step per 16 pixels */
-    int32_t  tdivz_step;    /* T/Z step per 16 pixels */
-    int32_t  zi_step;       /* 1/Z step per 16 pixels */
-} of_gpu_span_t;
+static uint32_t _gpu_wrptr;
+static uint32_t _gpu_fence_next;
 
-/* ======================================================================
- * Initialization
- * ====================================================================== */
+static const uint32_t _gpu_ring_mask = OF_GPU_RING_SIZE - 1;
 
-/* Initialize the GPU. Call once at startup.
- * Sets up the command ring buffer, resets GPU state. */
-void of_gpu_init(void);
+/* ---- Internal helpers ---- */
 
-/* Shut down the GPU. Waits for pending work, releases resources. */
-void of_gpu_shutdown(void);
+static inline void _gpu_ring_ensure(uint32_t bytes) {
+    while (((GPU_RING_RDPTR - _gpu_wrptr - 4) & _gpu_ring_mask) < bytes)
+        ;
+}
 
-/* ======================================================================
- * Colormap BRAM
- *
- * Upload a lookup table for indexed textures:
- *   output_color = colormap[light_level * 256 + texel_index]
- *
- * Doom:   colormap.lmp (34 × 256 = 8704 bytes)
- * Duke3D: palookup tables (shade × 256, up to 64 × 256 = 16384 bytes)
- * Quake:  colormap (64 × 256 = 16384 bytes)
- * Descent: similar lighting tables
- *
- * Max 16KB (64 light levels × 256 palette entries).
- * ====================================================================== */
+/* Write a word to the ring BRAM via MMIO (no cache issues). */
+static inline void _gpu_ring_write(uint32_t w) {
+    GPU_RING_DATA = w;
+    _gpu_wrptr = (_gpu_wrptr + 4) & _gpu_ring_mask;
+}
 
-void of_gpu_colormap_upload(const uint8_t *data, uint32_t size);
+static inline void _gpu_cmd_header(uint8_t cmd, uint32_t payload_words) {
+    _gpu_ring_ensure((1 + payload_words) * 4);
+    _gpu_ring_write(((uint32_t)cmd << 24) | (payload_words & 0x00FFFFFF));
+}
 
-/* ======================================================================
- * GPU State Commands
- *
- * State is "sticky" — set once, applies to all subsequent draws
- * until changed. State changes are recorded into the command ring
- * and take effect in order.
- * ====================================================================== */
+/* ================================================================
+ * API Functions
+ * ================================================================ */
 
-/* Bind a texture for subsequent triangle draws. */
-void of_gpu_bind_texture(const of_gpu_texture_t *tex);
+static inline void of_gpu_init(void) {
+    _gpu_wrptr = 0;
+    _gpu_fence_next = 1;
+    GPU_CTRL = 4;               /* ring_reset: clear wr_addr + wrptr + rdptr */
+    GPU_RING_WRPTR = 0;
+    GPU_CTRL = 1;               /* enable */
+}
 
-/* Set depth test function. OF_GPU_DEPTH_NONE to disable. */
-void of_gpu_depth_test(of_gpu_depth_func_t func);
+static inline void of_gpu_colormap_upload(const uint8_t *data, uint32_t size) {
+    GPU_CMAP_ADDR = 0;
+    const uint32_t *src32 = (const uint32_t *)data;
+    uint32_t words = size >> 2;
+    for (uint32_t i = 0; i < words; i++)
+        GPU_CMAP_DATA = src32[i];
+    for (uint32_t i = words << 2; i < size; i++)
+        GPU_CMAP_DATA = data[i];
+}
 
-/* Set blend mode. */
-void of_gpu_blend(of_gpu_blend_t mode);
+static inline void of_gpu_kick(void) {
+    GPU_RING_WRPTR = _gpu_wrptr;
+}
 
-/* Set alpha test reference value (for OF_GPU_BLEND_ALPHA).
- * Fragments with alpha < ref are discarded. */
-void of_gpu_alpha_ref(uint8_t ref);
+static inline uint32_t of_gpu_fence(void) {
+    uint32_t token = _gpu_fence_next++;
+    _gpu_cmd_header(GPU_CMD_FENCE, 1);
+    _gpu_ring_write(token);
+    return token;
+}
 
-/* Set the framebuffer target for triangle rendering.
- * Normally set automatically from of_video_surface(), but can be
- * overridden for render-to-texture or shadow maps. */
-void of_gpu_set_framebuffer(uint32_t addr, uint16_t stride);
+static inline uint32_t of_gpu_submit(void) {
+    uint32_t token = of_gpu_fence();
+    of_gpu_kick();
+    return token;
+}
 
-/* Set the Z-buffer target (SRAM address). */
-void of_gpu_set_zbuffer(uint32_t addr, uint16_t stride);
+static inline int of_gpu_fence_reached(uint32_t token) {
+    return (int32_t)(GPU_FENCE_REACHED - token) >= 0;
+}
 
-/* Set vertex color interpretation:
- *   For I8 textures:  vertex R channel = colormap light level
- *   For RGB565:       vertex RGB = modulate color (Gouraud) */
-void of_gpu_shade_mode(bool gouraud);
+static inline void of_gpu_wait(uint32_t token) {
+    while (!of_gpu_fence_reached(token))
+        ;
+}
 
-/* ======================================================================
- * Draw Commands
- * ====================================================================== */
+static inline void of_gpu_finish(void) {
+    of_gpu_wait(of_gpu_submit());
+}
 
-/* Clear framebuffer and/or depth buffer.
- * flags: OF_GPU_CLEAR_COLOR | OF_GPU_CLEAR_DEPTH
- * color: palette index (8-bit) or packed RGB565
- * depth: 16-bit Z value (typically 0xFFFF for far) */
-void of_gpu_clear(uint32_t flags, uint16_t color, uint16_t depth);
+static inline void of_gpu_shutdown(void) {
+    of_gpu_finish();
+    GPU_CTRL = 0;
+}
 
-/* Draw triangles from a vertex array.
- * Every 3 vertices form one triangle. count must be a multiple of 3.
- * Vertices are screen-space (CPU does projection).
- * Uses currently bound texture, depth func, blend mode.
- *
- * The vertex data is copied into the command ring — the caller's
- * buffer can be reused immediately after this call returns. */
-void of_gpu_draw_triangles(const of_gpu_vertex_t *verts, uint32_t count);
+static inline void of_gpu_nop(void) {
+    _gpu_cmd_header(GPU_CMD_NOP, 0);
+}
 
-/* Draw indexed triangles.
- * indices: array of uint16_t vertex indices into verts[].
- * idx_count: number of indices (must be multiple of 3).
- * Useful for mesh rendering (SM64, Descent, Wipeout). */
-void of_gpu_draw_indexed(const of_gpu_vertex_t *verts, uint32_t vert_count,
-                         const uint16_t *indices, uint32_t idx_count);
+static inline uint32_t of_gpu_ring_free(void) {
+    return (GPU_RING_RDPTR - _gpu_wrptr - 4) & _gpu_ring_mask;
+}
 
-/* Draw a pre-computed span (fast-path for span-based engines).
- * Bypasses triangle setup — the CPU provides all per-pixel parameters.
- * Span data is copied into the command ring. */
-void of_gpu_draw_span(const of_gpu_span_t *span);
+static inline int of_gpu_ring_can_fit(uint32_t bytes) {
+    return of_gpu_ring_free() >= bytes;
+}
 
-/* Batch-submit multiple spans. More efficient than individual calls
- * when the engine generates many spans per frame (Quake, Duke3D). */
-void of_gpu_draw_spans(const of_gpu_span_t *spans, uint32_t count);
+/* ---- State commands ---- */
 
-/* ======================================================================
- * Synchronization
- *
- * The command ring decouples CPU and GPU. The CPU can be many commands
- * ahead. Fences let the CPU know when the GPU has caught up.
- *
- * Typical frame:
- *   1. Record draw commands (of_gpu_clear, of_gpu_draw_*, ...)
- *   2. Insert fence (of_gpu_fence)
- *   3. Kick GPU (of_gpu_kick)
- *   4. Do CPU work (game logic, audio, next frame prep)
- *   5. Wait for fence before flipping (of_gpu_wait)
- * ====================================================================== */
+static inline void of_gpu_set_framebuffer(uint32_t addr, uint16_t stride) {
+    _gpu_cmd_header(GPU_CMD_SET_FB, 2);
+    _gpu_ring_write(addr);
+    _gpu_ring_write((uint32_t)stride);
+}
 
-/* Insert a fence into the command stream.
- * Returns a token that can be polled or waited on. */
-uint32_t of_gpu_fence(void);
+static inline void of_gpu_set_zbuffer(uint32_t addr, uint16_t stride) {
+    _gpu_cmd_header(GPU_CMD_SET_ZB, 2);
+    _gpu_ring_write(addr);
+    _gpu_ring_write((uint32_t)stride);
+}
 
-/* Flush buffered commands to the GPU.
- * Commands are not guaranteed to start processing until kick. */
-void of_gpu_kick(void);
+static inline void of_gpu_depth_test(of_gpu_depth_func_t func) {
+    _gpu_cmd_header(GPU_CMD_SET_DEPTH_FUNC, 1);
+    _gpu_ring_write((uint32_t)func);
+}
 
-/* Convenience: fence + kick in one call. Returns fence token. */
-uint32_t of_gpu_submit(void);
+static inline void of_gpu_blend(of_gpu_blend_t mode) {
+    _gpu_cmd_header(GPU_CMD_SET_BLEND, 1);
+    _gpu_ring_write((uint32_t)mode);
+}
 
-/* Check if the GPU has reached a fence. Non-blocking. */
-bool of_gpu_fence_reached(uint32_t token);
+static inline void of_gpu_alpha_ref(uint8_t ref) {
+    _gpu_cmd_header(GPU_CMD_SET_ALPHA_REF, 1);
+    _gpu_ring_write((uint32_t)ref);
+}
 
-/* Block until the GPU reaches a fence.
- * Spins on the fence — use of_gpu_fence_reached() for non-blocking. */
-void of_gpu_wait(uint32_t token);
+static inline void of_gpu_bind_texture(const of_gpu_texture_t *tex) {
+    _gpu_cmd_header(GPU_CMD_SET_TEXTURE, 4);
+    _gpu_ring_write(tex->addr);
+    _gpu_ring_write(((uint32_t)tex->width << 16) | tex->height);
+    _gpu_ring_write(((uint32_t)tex->format << 16) | tex->wrap_s);
+    _gpu_ring_write((uint32_t)tex->wrap_t);
+}
 
-/* Wait for the GPU to finish ALL pending commands. */
-void of_gpu_finish(void);
+static inline void of_gpu_shade_mode(int gouraud) {
+    _gpu_cmd_header(GPU_CMD_SET_SHADE, 1);
+    _gpu_ring_write(gouraud ? 1 : 0);
+}
 
-/* ======================================================================
- * Ring buffer management (advanced)
- *
- * The ring buffer lives in SDRAM. Default size: 64KB.
- * For heavy scenes, a larger ring avoids stalls.
- * ====================================================================== */
+/* ---- Draw commands ---- */
 
-/* Query free space in the command ring (bytes). */
-uint32_t of_gpu_ring_free(void);
+static inline void of_gpu_clear(uint32_t flags, uint16_t color, uint16_t depth) {
+    _gpu_cmd_header(GPU_CMD_CLEAR, 2);
+    _gpu_ring_write((flags << 16) | color);
+    _gpu_ring_write((uint32_t)depth);
+}
 
-/* Check if the ring has room for at least `bytes` of commands. */
-bool of_gpu_ring_can_fit(uint32_t bytes);
+/*
+ * Draw a single span.  18 payload words: 9 core + 3 depth + 6 perspective.
+ * All fields always transmitted; GPU ignores depth/perspective unless flagged.
+ */
+static inline void of_gpu_draw_span(const of_gpu_span_t *span) {
+    _gpu_cmd_header(GPU_CMD_DRAW_SPAN, 18);
+    _gpu_ring_write(span->fb_addr);
+    _gpu_ring_write(span->tex_addr);
+    _gpu_ring_write((uint32_t)span->s);
+    _gpu_ring_write((uint32_t)span->t);
+    _gpu_ring_write((uint32_t)span->sstep);
+    _gpu_ring_write((uint32_t)span->tstep);
+    _gpu_ring_write(((uint32_t)span->count << 16) |
+                    ((uint32_t)span->light << 8) |
+                    ((uint32_t)span->flags));
+    _gpu_ring_write(((uint32_t)(uint16_t)span->fb_stride << 16) |
+                    (uint32_t)span->tex_width);
+    _gpu_ring_write(((uint32_t)span->tex_shift << 8) |
+                    (uint32_t)span->tex_bits);
+    _gpu_ring_write(span->z_addr);
+    _gpu_ring_write((uint32_t)span->zi);
+    _gpu_ring_write((uint32_t)span->zistep);
+    _gpu_ring_write((uint32_t)span->sdivz);
+    _gpu_ring_write((uint32_t)span->tdivz);
+    _gpu_ring_write((uint32_t)span->zi_persp);
+    _gpu_ring_write((uint32_t)span->sdivz_step);
+    _gpu_ring_write((uint32_t)span->tdivz_step);
+    _gpu_ring_write((uint32_t)span->zi_step);
+}
 
-/* ======================================================================
- * Status / debug
- * ====================================================================== */
+static inline void _gpu_write_vertex(const of_gpu_vertex_t *v) {
+    _gpu_ring_write(((uint32_t)(uint16_t)v->x << 16) | (uint16_t)v->y);
+    _gpu_ring_write(((uint32_t)v->z << 16));
+    _gpu_ring_write((uint32_t)v->s);
+    _gpu_ring_write((uint32_t)v->t);
+    _gpu_ring_write((uint32_t)v->w);
+    _gpu_ring_write(((uint32_t)v->a << 24) | ((uint32_t)v->b << 16) |
+                    ((uint32_t)v->g << 8) | v->r);
+}
 
-/* Get number of triangles the GPU has drawn since init. */
-uint32_t of_gpu_stat_triangles(void);
+/*
+ * Draw triangles from a vertex array.
+ * @param verts        Every 3 consecutive vertices form one triangle.
+ * @param num_vertices Number of vertices (must be a multiple of 3).
+ */
+static inline void of_gpu_draw_triangles(const of_gpu_vertex_t *verts,
+                                          uint32_t num_vertices) {
+    _gpu_cmd_header(GPU_CMD_DRAW_TRIANGLES, 1 + num_vertices * 6);
+    _gpu_ring_write(num_vertices);
+    for (uint32_t i = 0; i < num_vertices; i++)
+        _gpu_write_vertex(&verts[i]);
+}
 
-/* Get number of pixels the GPU has drawn since init. */
-uint32_t of_gpu_stat_pixels(void);
+/* ---- Statistics ---- */
 
-/* Get number of texture cache misses since init. */
-uint32_t of_gpu_stat_cache_misses(void);
+static inline uint32_t of_gpu_stat_pixels(void) { return GPU_STAT_PIXELS; }
+static inline uint32_t of_gpu_stat_spans(void)  { return GPU_STAT_SPANS; }
+
+#endif /* !OF_PC */
 
 #ifdef __cplusplus
 }
