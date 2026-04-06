@@ -31,10 +31,11 @@
  * ====================================================================== */
 
 typedef struct {
-    uint8_t  *pcm_u8;
+    uint8_t  *pcm;           /* PCM data in CRAM1 */
     uint32_t  sample_count;
     uint32_t  sample_rate;
     int       volume;
+    int       is_16bit;      /* 1 = 16-bit signed, 0 = 8-bit signed */
 } Mix_Chunk;
 
 typedef struct { int unused; } Mix_Music;
@@ -93,34 +94,39 @@ static inline Mix_Chunk *Mix_LoadWAV(const char *file) {
     uint32_t num_samples = result.pcm_len;
     if (result.bits_per_sample == 16) num_samples /= 2;
     if (result.channels == 2) num_samples /= 2;
+    int is_16bit = (result.bits_per_sample == 16);
+    int step = result.channels;
 
-    uint8_t *pcm_u8 = (uint8_t *)malloc(num_samples);
-    if (!pcm_u8) { free(data); return NULL; }
+    uint32_t alloc_size = is_16bit ? num_samples * 2 : num_samples;
+    uint8_t *pcm = (uint8_t *)of_mixer_alloc_samples(alloc_size);
+    if (!pcm) { free(data); return NULL; }
 
-    if (result.bits_per_sample == 16) {
+    if (is_16bit) {
+        int16_t *dst = (int16_t *)pcm;
         const int16_t *s = (const int16_t *)result.pcm;
-        int step = result.channels;
         for (uint32_t i = 0; i < num_samples; i++)
-            pcm_u8[i] = (uint8_t)((s[i * step] >> 8) + 128);
+            dst[i] = s[i * step];
     } else {
-        int step = result.channels;
+        /* Keep as 8-bit signed (WAV stores unsigned, convert to signed) */
         for (uint32_t i = 0; i < num_samples; i++)
-            pcm_u8[i] = result.pcm[i * step];
+            pcm[i] = result.pcm[i * step] - 128;
     }
     free(data);
 
     Mix_Chunk *chunk = (Mix_Chunk *)calloc(1, sizeof(Mix_Chunk));
-    if (!chunk) { free(pcm_u8); return NULL; }
-    chunk->pcm_u8 = pcm_u8;
+    if (!chunk) return NULL;
+    chunk->pcm = pcm;
     chunk->sample_count = num_samples;
     chunk->sample_rate = result.sample_rate;
     chunk->volume = MIX_MAX_VOLUME;
+    chunk->is_16bit = is_16bit;
     return chunk;
 }
 
 static inline void Mix_FreeChunk(Mix_Chunk *chunk) {
     if (!chunk) return;
-    free(chunk->pcm_u8);
+    /* pcm lives in CRAM1 bump allocator — can't free individually.
+     * Call of_mixer_free_samples() to reset the entire pool. */
     free(chunk);
 }
 
@@ -129,8 +135,7 @@ static inline void Mix_FreeChunk(Mix_Chunk *chunk) {
  * ====================================================================== */
 
 static inline int Mix_PlayChannel(int channel, Mix_Chunk *chunk, int loops) {
-    if (!chunk || !chunk->pcm_u8) return -1;
-    (void)loops;
+    if (!chunk || !chunk->pcm) return -1;
 
     if (!__mix_initialized) {
         of_audio_init();
@@ -140,9 +145,19 @@ static inline int Mix_PlayChannel(int channel, Mix_Chunk *chunk, int loops) {
     }
 
     int vol = (chunk->volume * 255) / 128;
-    int voice = of_mixer_play(chunk->pcm_u8, chunk->sample_count,
+    int voice;
+    if (chunk->is_16bit)
+        voice = of_mixer_play(chunk->pcm, chunk->sample_count,
                               chunk->sample_rate, 0, vol);
+    else
+        voice = of_mixer_play_8bit(chunk->pcm, chunk->sample_count,
+                                   chunk->sample_rate, 0, vol);
     if (voice < 0) return -1;
+
+    /* loops: -1 = infinite, 0 = play once, N = play N+1 times.
+     * Hardware only supports infinite loop — treat any loops != 0 as looping. */
+    if (loops != 0)
+        of_mixer_set_loop(voice, 0, (int)chunk->sample_count);
 
     if (channel < 0) {
         for (int i = 0; i < __mix_max_channels; i++) {
