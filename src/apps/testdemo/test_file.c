@@ -514,7 +514,7 @@ void test_posix_file_io(void) {
 }
 
 void test_lseek_readahead(void) {
-    section_start("Seek Readahead");
+    section_start("Seek Rdahd");
 
     /* Test: lseek must invalidate read-ahead buffer.
      * Opens a data slot, reads N bytes, seeks back to 0, reads again.
@@ -583,7 +583,7 @@ void test_lseek_readahead(void) {
 }
 
 void test_lseek_large_read(void) {
-    section_start("Seek Large Rd");
+    section_start("Seek Large");
 
     /* Simulates art-file loading: read a large block, seek back,
      * read again at a different offset. Exercises read-ahead
@@ -756,7 +756,7 @@ void test_file_limit(void) {
 }
 
 void test_oversize_read(void) {
-    section_start("Oversize Read");
+    section_start("Oversize Rd");
 
     /* Read with a buffer much larger than the file.
      * os.bin is ~112KB. Request 256KB — fread must return the

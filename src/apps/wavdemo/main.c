@@ -116,7 +116,8 @@ int main(void) {
     printf("  WAV Player Demo\n\n");
     printf("  Loading WAV file...\n");
 
-    /* TODO: use fopen("audio.wav") when DS_CMD_GETFILE returns filenames */
+    /* Loads from data slot 3; filename-based fopen requires SDK plumbing
+     * of_file_get_name from the OS, which is not wired up yet. */
     FILE *f = fopen("slot:3", "rb");
     if (!f) {
         printf("  Error: cannot open WAV\n");

@@ -95,10 +95,12 @@ int vprintf(const char *fmt, va_list ap) {
     return n;
 }
 
+/* sprintf: unbounded by C standard. We pass INT_MAX so vsnprintf does
+ * not truncate; the caller is responsible for sizing buf. Prefer snprintf. */
 int sprintf(char *buf, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    int n = JT->vsnprintf(buf, 1024, fmt, ap);
+    int n = JT->vsnprintf(buf, 0x7fffffff, fmt, ap);
     va_end(ap);
     return n;
 }
@@ -150,9 +152,7 @@ int stat(const char *path, struct _of_stat *buf) {
     return (sz >= 0) ? 0 : -1;
 }
 void *alloca(unsigned int sz)  { return __builtin_alloca(sz); }
-int min(int a, int b)          { return a < b ? a : b; }
-int max(int a, int b)          { return a > b ? a : b; }
-int abs(int x)                 { return x < 0 ? -x : x; }
+int abs(int x)                 { return JT->abs(x); }
 
 /* ======================================================================
  * openfpgaOS convenience — linkable symbols for SDK inline functions

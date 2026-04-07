@@ -12,8 +12,8 @@
 #ifndef OF_FILE_H
 #define OF_FILE_H
 
-/* No of_file_* functions — use POSIX file I/O.
- * Async reads below are for advanced use (background loading). */
+/* Standard file I/O is via POSIX (fopen/fread/fwrite/fclose).
+ * The of_file_* helpers below are advanced async DMA reads only. */
 
 #ifndef OF_PC
 
