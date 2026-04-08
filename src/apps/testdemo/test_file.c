@@ -302,13 +302,13 @@ void test_file_io(void) {
     /* Speed test: read 64KB from slot:1 and measure throughput */
     {
         static uint8_t speed_buf[65536];
-        uint32_t t_start = clock_ms();
+        uint32_t t_start = of_time_ms();
         f = fopen("slot:1", "rb");
         if (f) {
             fread(speed_buf, 1, 65536, f);
             fclose(f);
         }
-        uint32_t t_elapsed = clock_ms() - t_start;
+        uint32_t t_elapsed = of_time_ms() - t_start;
         ASSERT("speed", t_elapsed < 5000);
         (void)t_elapsed;
     }
@@ -367,18 +367,16 @@ void test_posix_file_io(void) {
             for (int i = 0; i < 32; i++) {
                 if (r1[i] != r2[i]) { d = i; break; }
             }
-            snprintf(__buf, sizeof(__buf), "diff@%d: %02x!=%02x hdr0=%02x",
-                     d, r1[d], r2[d], hdr[0]);
+            /* Encode the r1=hdr / r2=hdr diagnostic into the failure
+             * detail itself so it lands in the paged summary instead
+             * of bleeding into the column layout via stray printfs. */
+            int r1ok = (memcmp(r1, hdr, 16) == 0);
+            int r2ok = (memcmp(r2, hdr, 16) == 0);
+            snprintf(__buf, sizeof(__buf), "d@%d %02x!=%02x %s%s",
+                     d, r1[d], r2[d],
+                     r1ok ? "r1ok" : "r1NO",
+                     r2ok ? " r2ok" : " r2NO");
             test_fail("seek0 data", __buf);
-            /* Also check if r1 matches original header */
-            if (memcmp(r1, hdr, 16) == 0)
-                printf("\n    r1=hdr OK ");
-            else
-                printf("\n    r1!=hdr ");
-            if (memcmp(r2, hdr, 16) == 0)
-                printf("r2=hdr OK ");
-            else
-                printf("r2!=hdr ");
         } else {
             test_pass("seek0 data");
         }

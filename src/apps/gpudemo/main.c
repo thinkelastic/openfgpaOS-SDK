@@ -525,10 +525,8 @@ static void draw_persp_demo(int frame) {
 int main(void) {
     of_video_init();
     of_video_set_display_mode(OF_DISPLAY_TERMINAL);
-    /* set_palette() — TEMPORARILY SKIPPED to test whether palette
-     * MMIO writes are somehow corrupting GPU state. The standalone
-     * diagnostic that worked never called set_palette(). */
-    printf("[gpudemo] start (no palette)\n");
+    set_palette();
+    printf("[gpudemo] start\n");
 
     /* Allocate textures from the heap (SDRAM, reachable by both CPU and GPU). */
     checkerboard_tex = malloc(64 * 64);

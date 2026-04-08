@@ -109,10 +109,10 @@ int main(int argc, char **argv) {
 	printf("rendering...\n");
 	create_scene();
 
-	unsigned long t0 = clock_ms();
+	unsigned long t0 = of_time_ms();
 	render(xres, yres, 1);
 	printf("done in %lu ms (%u rays, %u primary)\n",
-	       clock_ms() - t0, rays, prim_rays);
+	       of_time_ms() - t0, rays, prim_rays);
 
 	/* Wait for button press */
 	while (1) {

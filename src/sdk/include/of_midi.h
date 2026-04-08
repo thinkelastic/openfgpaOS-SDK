@@ -80,10 +80,10 @@ int  of_midi_get_volume(void);
 
 /* Load a custom instrument bank: 128 melodic + 47 drum records in the
  * WOPL-derived 4-op format described at OF_MIDI_INST_SIZE above
- * (175 × 25 = 4375 bytes total). Pass NULL to restore the built-in bank. */
+ * (175 × 26 = 4550 bytes total). Pass NULL to restore the built-in bank. */
 void of_midi_load_bank(const uint8_t *bank);
 
-/* Pointer to the built-in GM instrument bank (4375 bytes, read-only).
+/* Pointer to the built-in GM instrument bank (4550 bytes, read-only).
  * First 128 records are melodic programs 0..127, next 47 are GM drum
  * notes 35..81 in order. Useful for merging custom patches over the
  * default bank. */

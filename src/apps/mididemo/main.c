@@ -311,7 +311,7 @@ int main(void) {
 
     /* Start the first instrument */
     of_midi_play(diag_inst[idx].buf, diag_inst[idx].len, 0);
-    note_start_ms = clock_ms();
+    note_start_ms = of_time_ms();
     printf("\033[14;2H >>> %-30s\n", diag_inst[idx].name);
 
     while (1) {
@@ -370,7 +370,7 @@ int main(void) {
 
         /* Auto-advance after ~2.5s */
         if (auto_advance && change_inst < 0) {
-            uint32_t now = clock_ms();
+            uint32_t now = of_time_ms();
             if (now - note_start_ms > 2500) {
                 change_inst = (idx + 1) % max_idx;
             }
@@ -397,7 +397,7 @@ int main(void) {
                 printf("\033[14;2H                                       ");
                 printf("\033[14;2H >>> %s\n", diag_inst[idx].name);
             }
-            note_start_ms = clock_ms();
+            note_start_ms = of_time_ms();
         }
 
         of_midi_pump();

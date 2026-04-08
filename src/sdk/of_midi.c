@@ -2,7 +2,7 @@
  * of_midi.c -- MIDI playback engine for openfpgaOS
  *
  * Plays Standard MIDI Files (Format 0 and 1) through 18 OPL3 channels.
- * Non-blocking design: of_midi_pump() is driven by clock_us().
+ * Non-blocking design: of_midi_pump() is driven by of_time_us().
  */
 
 #include "include/of_midi.h"
@@ -1398,7 +1398,7 @@ int of_midi_play(const uint8_t *data, uint32_t len, int loop) {
 
     M.playing = 1;
     M.paused = 0;
-    M.last_pump_us = clock_us();
+    M.last_pump_us = of_time_us();
 
     return OF_MIDI_OK;
 }
@@ -1417,7 +1417,7 @@ void of_midi_pause(void) {
 void of_midi_resume(void) {
     if (M.paused) {
         M.paused = 0;
-        M.last_pump_us = clock_us();
+        M.last_pump_us = of_time_us();
     }
 }
 
@@ -1425,7 +1425,7 @@ void of_midi_pump(void) {
     if (!M.playing || M.paused)
         return;
 
-    uint32_t now = clock_us();
+    uint32_t now = of_time_us();
     int64_t elapsed = (int64_t)(now - M.last_pump_us);
     M.last_pump_us = now;
 
@@ -1466,7 +1466,7 @@ void of_midi_pump(void) {
             all_notes_off();
             reset_channels();
             reset_tracks();
-            M.last_pump_us = clock_us();
+            M.last_pump_us = of_time_us();
         } else {
             all_notes_off();
             M.playing = 0;

@@ -198,7 +198,7 @@ void test_mixer_adv(void) {
         int v = of_mixer_play((const uint8_t *)s16_buf, ADV_TONE_LEN, 11025, 0, 255);
         if (v >= 0) {
             of_mixer_set_loop(v, 0, ADV_TONE_LEN);
-            of_mixer_set_vol_rate(v, 4);  /* slow ramp */
+            of_mixer_set_volume_ramp(v, 4);  /* slow ramp */
             of_mixer_set_volume(v, 0);    /* ramp to 0 */
             usleep(10 * 1000);
             ASSERT("MA.08 ramp", of_mixer_voice_active(v));  /* still active during ramp */
