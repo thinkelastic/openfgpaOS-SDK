@@ -99,23 +99,23 @@ void section_end(void) {
     next_slot();
 }
 
-/* Wait for A button press.
+/* Wait for an A press, with explicit release/press phases.
  *
- * Uses level-based detection (of_btn) instead of edge (of_btn_pressed)
- * because edge state can be stale or missed across consecutive
- * wait_press calls — especially with the current OS usleep regression
- * making these poll loops spin much faster than the input frame rate. */
+ * Pure level polling, no usleep, no edge detection. Always polls
+ * before checking so the level read can never be stale. The release
+ * phase guarantees any hold from a prior wait_press is consumed
+ * before we look for a fresh press. */
 static void wait_press(void) {
-    /* Wait for release first (in case user is still holding A) */
-    do {
+    /* Phase 1: wait until A is not held */
+    while (1) {
         of_input_poll();
-        usleep(16000);
-    } while (of_btn(OF_BTN_A));
-    /* Then wait for the next press */
-    do {
+        if (!of_btn(OF_BTN_A)) break;
+    }
+    /* Phase 2: wait until A is held */
+    while (1) {
         of_input_poll();
-        usleep(16000);
-    } while (!of_btn(OF_BTN_A));
+        if (of_btn(OF_BTN_A)) break;
+    }
 }
 
 /* Show failure summary, paged. Last page footer is "Press A to retest".

@@ -8,11 +8,24 @@
  *
  * Uncached mirror: base | 0x08000000  (bypasses D-cache)
  * e.g. CRAM0 uncached = 0x38000000
- */
+ *
+ * CRAM1 is partitioned by the OS:
+ *   0x000000 – 0x27FFFF  saves (10 slots × 256 KB)
+ *   0x280000 – 0x28FFFF  FTAB
+ *   0x290000 – 0x2FFFFF  scratch
+ *   0x300000 – 0x3FFFFF  I/O cache
+ *   0x400000 – 0xEFFFFF  audio samples (11 MB)
+ *   0xF00000 – 0xFFFFFF  unused tail (1 MB) — safe for memory tests
+ *
+ * The test region MUST live in the unused tail. Hitting save slot 0 at
+ * offset 0 is non-idempotent: test_saves writes valid save metadata on
+ * iteration 1, the bridge persists it to SD, and on iteration 2 the
+ * bridge / OS may rewrite that region mid-test, corrupting the readback. */
 #define CRAM0_CACHED_BASE   0x30000000  /* CRAM0 cached base */
 #define CRAM0_UNCACHED_BASE 0x38000000  /* CRAM0 uncached base */
 #define CRAM0_TEST_OFFSET   0x00800000  /* 8 MB offset — avoids slot table at base */
 #define CRAM1_UNCACHED_BASE 0x39000000  /* CRAM1 uncached (bridge-accessible) */
+#define CRAM1_TEST_OFFSET   0x00F00000  /* unused tail, past samples */
 #define SRAM_BASE           0x3A000000  /* On-chip SRAM */
 
 /* SDRAM region used to evict D-cache lines (must not overlap app code/data) */
@@ -22,7 +35,7 @@ void test_psram_memory(void) {
     section_start("PSRAM Mem");
 
     volatile uint32_t *cram0 = (volatile uint32_t *)(CRAM0_CACHED_BASE + CRAM0_TEST_OFFSET);
-    volatile uint32_t *cram1 = (volatile uint32_t *)CRAM1_UNCACHED_BASE;
+    volatile uint32_t *cram1 = (volatile uint32_t *)(CRAM1_UNCACHED_BASE + CRAM1_TEST_OFFSET);
     volatile uint32_t *sram  = (volatile uint32_t *)SRAM_BASE;
 
     cram0[0] = 0xDEADBEEF;
