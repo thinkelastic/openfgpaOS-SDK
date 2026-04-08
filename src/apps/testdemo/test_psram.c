@@ -9,23 +9,28 @@
  * Uncached mirror: base | 0x08000000  (bypasses D-cache)
  * e.g. CRAM0 uncached = 0x38000000
  *
- * CRAM1 is partitioned by the OS:
- *   0x000000 – 0x27FFFF  saves (10 slots × 256 KB)
- *   0x280000 – 0x28FFFF  FTAB
- *   0x290000 – 0x2FFFFF  scratch
+ * CRAM1 is FULLY partitioned by the OS:
+ *   0x000000 – 0x27FFFF  saves (10 slots × 256 KB) — bridge-persisted
+ *   0x280000 – 0x28FFFF  FTAB (filename table) — bridge-written
+ *   0x290000 – 0x2FFFFF  file-IO scratch (~448 KB)
  *   0x300000 – 0x3FFFFF  I/O cache
  *   0x400000 – 0xEFFFFF  audio samples (11 MB)
- *   0xF00000 – 0xFFFFFF  unused tail (1 MB) — safe for memory tests
+ *   0xF00000 – 0xFFFFFF  AUDIO_SCRATCH_CRAM1 (1 MB) — mixer scratch
  *
- * The test region MUST live in the unused tail. Hitting save slot 0 at
- * offset 0 is non-idempotent: test_saves writes valid save metadata on
- * iteration 1, the bridge persists it to SD, and on iteration 2 the
- * bridge / OS may rewrite that region mid-test, corrupting the readback. */
+ * Picking ANY region the bridge / mixer / file layer touches is
+ * non-idempotent across iterations: the original test wrote slot 0
+ * (saves) which the bridge then re-read on the next pass; the unused
+ * tail turned out to be the audio scratch buffer.
+ *
+ * file-IO scratch is the only region that is (a) not bridge-managed
+ * and (b) only touched during user-initiated file ops. test_psram_memory
+ * runs BEFORE any file test, so its readback can't race the OS — and
+ * between iterations the test's own pattern is the last write to land. */
 #define CRAM0_CACHED_BASE   0x30000000  /* CRAM0 cached base */
 #define CRAM0_UNCACHED_BASE 0x38000000  /* CRAM0 uncached base */
 #define CRAM0_TEST_OFFSET   0x00800000  /* 8 MB offset — avoids slot table at base */
 #define CRAM1_UNCACHED_BASE 0x39000000  /* CRAM1 uncached (bridge-accessible) */
-#define CRAM1_TEST_OFFSET   0x00F00000  /* unused tail, past samples */
+#define CRAM1_TEST_OFFSET   0x00290000  /* file-IO scratch — see comment above */
 #define SRAM_BASE           0x3A000000  /* On-chip SRAM */
 
 /* SDRAM region used to evict D-cache lines (must not overlap app code/data) */
