@@ -71,8 +71,16 @@ static void evict_dcache(void) {
  * Uses SDRAM cached/uncached aliases (0x10/0x50) as the baseline
  * since those are well-understood. CRAM1 variants follow.
  * ================================================================ */
+/* All four cache tests below use hardcoded SDRAM/CRAM addresses that
+ * only happen to map to memory on the Pocket target. On any other
+ * platform we skip cleanly so the suite still completes. */
+static int cache_tests_supported(void) {
+    return of_get_caps()->platform_id == OF_PLATFORM_POCKET;
+}
+
 void test_cache_primitives(void) {
     section_start("Cache Prim");
+    if (!cache_tests_supported()) { test_pass("not pocket"); section_end(); return; }
 
     /* Use two addresses 4KB apart — guaranteed different cache sets */
     volatile uint32_t *c_a = (volatile uint32_t *)(SDRAM_CACHED + SDRAM_TEST_OFF);
@@ -463,6 +471,7 @@ void test_cache_primitives(void) {
  * ================================================================ */
 void test_cache(void) {
     section_start("Cache SDRAM");
+    if (!cache_tests_supported()) { test_pass("not pocket"); section_end(); return; }
 
     volatile uint32_t *c = (volatile uint32_t *)(SDRAM_CACHED + SDRAM_TEST_OFF);
     volatile uint32_t *u = (volatile uint32_t *)(SDRAM_UNCACHED + SDRAM_TEST_OFF);
@@ -524,6 +533,7 @@ void test_cache(void) {
  * ================================================================ */
 void test_cache_cram0(void) {
     section_start("Cache CRAM0");
+    if (!cache_tests_supported()) { test_pass("not pocket"); section_end(); return; }
 
     volatile uint32_t *c = (volatile uint32_t *)(CRAM0_CACHED + CRAM0_TEST_OFF);
     volatile uint32_t *u = (volatile uint32_t *)(CRAM0_UNCACHED + CRAM0_TEST_OFF);
@@ -575,6 +585,7 @@ void test_cache_cram0(void) {
  * ================================================================ */
 void test_cache_cram1(void) {
     section_start("Cache CRAM1");
+    if (!cache_tests_supported()) { test_pass("not pocket"); section_end(); return; }
 
     volatile uint32_t *u = (volatile uint32_t *)(CRAM1_UNCACHED + CRAM1_TEST_OFF);
 

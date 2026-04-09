@@ -81,7 +81,8 @@ static struct {
     /* Configuration */
     const char *uart_path;
     int         baud;
-    bool        verbose;
+    bool        verbose;        /* -v: state, packet headers, stream progress */
+    bool        trace;          /* -t: -v + hex dumps + IPC events + timestamps */
 
     /* State machine */
     int         state;
@@ -131,12 +132,54 @@ static int64_t now_ms(void) {
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+/* Wall-clock relative timestamp prefix for trace output. The first
+ * call latches a t0; everything after prints "[+12.345s] ". Keeping
+ * the prefix relative makes log diffs across runs trivially comparable. */
+static void ts_prefix(void) {
+    static int64_t t0 = 0;
+    if (!G.trace) return;
+    int64_t now = now_ms();
+    if (t0 == 0) t0 = now;
+    double dt = (double)(now - t0) / 1000.0;
+    fprintf(stderr, "[+%7.3fs] ", dt);
+}
+
 static void logv(const char *fmt, ...) {
     if (!G.verbose) return;
+    ts_prefix();
     va_list ap;
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
     va_end(ap);
+}
+
+/* tracev() is the noisier sibling of logv(). Anything that would be
+ * spam at -v level (per-byte UART traffic, hex dumps, IPC chatter)
+ * goes through here so plain -v stays readable. */
+static void tracev(const char *fmt, ...) {
+    if (!G.trace) return;
+    ts_prefix();
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+}
+
+/* Hex dump for trace output. Prints up to `len` bytes as
+ *   tag: 02 1F 20 04 00 00 00  ..len.
+ * Truncates at TRACE_DUMP_MAX so a 4 KB stream chunk doesn't fill
+ * the terminal — the header + first/last bytes are usually enough
+ * to diagnose framing problems. */
+#define TRACE_DUMP_MAX 32
+static void hex_dump(const char *tag, const uint8_t *buf, uint32_t len) {
+    if (!G.trace) return;
+    ts_prefix();
+    fprintf(stderr, "%s [%u]:", tag, len);
+    uint32_t n = len < TRACE_DUMP_MAX ? len : TRACE_DUMP_MAX;
+    for (uint32_t i = 0; i < n; i++)
+        fprintf(stderr, " %02X", buf[i]);
+    if (len > TRACE_DUMP_MAX) fprintf(stderr, " ...");
+    fprintf(stderr, "\n");
 }
 
 static const char *state_name(int s) {
@@ -328,6 +371,7 @@ static void uart_close(void) {
 }
 
 static int uart_send(const uint8_t *data, int len) {
+    hex_dump("[tx-bytes]", data, (uint32_t)len);
     int total = 0;
     while (total < len) {
         ssize_t n = write(G.uart_fd, data + total, (size_t)(len - total));
@@ -338,6 +382,7 @@ static int uart_send(const uint8_t *data, int len) {
                 usleep(100);
                 continue;
             }
+            tracev("[tx-bytes] write error: %s\n", strerror(errno));
             return -1; /* EIO or device gone */
         }
         total += (int)n;
@@ -348,7 +393,7 @@ static int uart_send(const uint8_t *data, int len) {
 static int uart_send_packet(uint8_t cmd, const void *payload, uint32_t payload_len) {
     uint8_t pkt[PHDP_MAX_PACKET];
     int pkt_len = phdp_build_packet(pkt, G.tx_seq++, cmd, payload, payload_len);
-    logv("[tx] cmd=0x%02X seq=%u len=%u\n", cmd, (unsigned)(G.tx_seq - 1), payload_len);
+    tracev("[tx] cmd=0x%02X seq=%u len=%u\n", cmd, (unsigned)(G.tx_seq - 1), payload_len);
     return uart_send(pkt, pkt_len);
 }
 
@@ -446,9 +491,9 @@ static int stream_send_next_chunk(void) {
     G.stream.last_chunk_ms = now_ms();
     G.stream.retries = 0;
 
-    if (G.verbose) {
+    {
         unsigned pct = (unsigned)(G.stream.bytes_sent * 100 / G.stream.file_size);
-        logv("[stream] sent %u/%u (%u%%)\n", G.stream.bytes_sent, G.stream.file_size, pct);
+        tracev("[stream] sent %u/%u (%u%%)\n", G.stream.bytes_sent, G.stream.file_size, pct);
     }
 
     return 0;
@@ -584,9 +629,11 @@ static void handle_console_log(const uint8_t *payload, uint32_t len) {
     log_ring_write(line, line_len);
     log_ring_broadcast(line, line_len);
 
-    if (G.verbose) {
-        fprintf(stderr, "[log] %.*s", (int)line_len, line);
-    }
+    /* Trace-only stderr mirror — the structured log already lands in
+     * the client's `phdp logs` stream verbatim, so duplicating it on
+     * phdpd's stderr at -v level just doubles every line on the
+     * user's terminal. */
+    tracev("[console-log] %.*s", (int)line_len, line);
 }
 
 static void handle_exec_start(const uint8_t *payload, uint32_t len) {
@@ -604,8 +651,12 @@ static void handle_exec_start(const uint8_t *payload, uint32_t len) {
 
     set_state(PHDP_STATE_MONITORING);
 
-    /* Notify any IPC clients waiting for exec */
-    uint8_t ok = 1;
+    /* Notify any IPC clients waiting for exec.
+     * 2026-04-08: success code is 0 — phdp.c cmd_wait treats
+     * result==0 as EXIT_OK and anything else as "wait failed". Was
+     * previously 1 which made every successful wait look like an
+     * error to the client. */
+    uint8_t ok = 0;
     for (int i = 0; i < G.num_clients; i++) {
         if (G.clients[i].wait_exec) {
             (void)write(G.clients[i].fd, &ok, 1);
@@ -619,8 +670,12 @@ static void process_uart_packet(const uint8_t *pkt, uint32_t total_len) {
     if (phdp_parse_header(pkt, &hdr) != 0) return;
     if (phdp_validate_crc(pkt, total_len) != 0) {
         logv("[uart] CRC error, dropping packet cmd=0x%02X\n", hdr.cmd);
+        hex_dump("[crc-fail]", pkt, total_len);
         return;
     }
+
+    tracev("[rx] cmd=0x%02X seq=%u len=%u\n", hdr.cmd, hdr.seq, hdr.len);
+    hex_dump("[rx-bytes]", pkt, total_len);
 
     const uint8_t *payload = pkt + PHDP_HEADER_SIZE;
 
@@ -642,6 +697,27 @@ static void process_uart_packet(const uint8_t *pkt, uint32_t total_len) {
  * Scans for STX, validates header + CRC, dispatches.
  */
 static void uart_process_rx(void) {
+    /* First pass: drain any console bytes that have no PHDP STX in
+     * sight. This is independent of the 9-byte PHDP header minimum
+     * below -- a short trailing console line (e.g. the last status
+     * print of a boot banner) must reach the user immediately, not
+     * wait for the buffer to grow past PHDP_HEADER_SIZE+CRC. */
+    {
+        uint32_t scan = 0;
+        while (scan < G.uart_rx_len && G.uart_rx[scan] != PHDP_STX)
+            scan++;
+        if (scan == G.uart_rx_len && scan > 0) {
+            /* No STX anywhere -- entire buffer is console output. */
+            tracev("[console-rx] %u bytes (no STX): %.*s\n", scan,
+                   (int)(scan > 60 ? 60 : scan), (const char *)G.uart_rx);
+            (void)!write(STDOUT_FILENO, G.uart_rx, scan);
+            log_ring_write((const char *)G.uart_rx, scan);
+            log_ring_broadcast((const char *)G.uart_rx, scan);
+            G.uart_rx_len = 0;
+            return;
+        }
+    }
+
     while (G.uart_rx_len >= PHDP_HEADER_SIZE + PHDP_CRC_SIZE) {
         /* Scan for STX */
         uint32_t offset = 0;
@@ -649,8 +725,13 @@ static void uart_process_rx(void) {
             offset++;
 
         if (offset > 0) {
-            /* Non-PHDP bytes before STX — treat as raw console output */
-            logv("[console] %u bytes: %.*s\n", offset, (int)(offset > 60 ? 60 : offset), (const char *)G.uart_rx);
+            /* Non-PHDP bytes before STX — treat as raw console output.
+             * Forward bytes as-is to phdpd's stdout for the live screen
+             * mirror, plus the log ring + broadcast for `phdp logs`.
+             * The per-packet `[console-rx]` debug marker is trace-only. */
+            tracev("[console-rx] %u bytes: %.*s\n", offset,
+                   (int)(offset > 60 ? 60 : offset), (const char *)G.uart_rx);
+            (void)!write(STDOUT_FILENO, G.uart_rx, offset);
             log_ring_write((const char *)G.uart_rx, offset);
             log_ring_broadcast((const char *)G.uart_rx, offset);
             G.uart_rx_len -= offset;
@@ -703,6 +784,7 @@ static void uart_process_rx(void) {
             if (G.uart_rx[i] == PHDP_STX) break;
         if (i == G.uart_rx_len) {
             /* All remaining bytes are console output */
+            (void)!write(STDOUT_FILENO, G.uart_rx, G.uart_rx_len);
             log_ring_write((const char *)G.uart_rx, G.uart_rx_len);
             log_ring_broadcast((const char *)G.uart_rx, G.uart_rx_len);
             G.uart_rx_len = 0;
@@ -723,8 +805,14 @@ static int uart_read_available(void) {
     }
 
     ssize_t n = read(G.uart_fd, G.uart_rx + G.uart_rx_len, space);
-    if (n > 0 && G.state == PHDP_STATE_MONITORING)
-        logv("[uart-mon] read %zd bytes\n", n);
+    if (n > 0) {
+        /* Per-read [uart-mon] is trace-only — at -v we'd be printing
+         * a stderr line for every UART burst while the screen mirror
+         * was already flowing through stdout. */
+        if (G.state == PHDP_STATE_MONITORING)
+            tracev("[uart-mon] read %zd bytes\n", n);
+        hex_dump("[rx-raw]", G.uart_rx + G.uart_rx_len, (uint32_t)n);
+    }
     if (n < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
             return 0;
@@ -735,25 +823,40 @@ static int uart_read_available(void) {
 
     G.uart_rx_len += (uint32_t)n;
 
-    /* In MONITORING state, treat bytes as raw console output unless
-     * we see STX (0x02) which means the Pocket rebooted and is sending
-     * EVT_BOOT_ALIVE — switch back to PHDP parsing. */
+    /* In MONITORING state bytes are normally raw console output, but
+     * the kernel's boot-ROM disk backend issues PHDP packets
+     * (REQ_OVERRIDE etc.) over the same UART after EXEC_START. We
+     * split the WHOLE buffer (not just new bytes) at the first STX:
+     * everything before STX is console, STX-and-after is handed to
+     * uart_process_rx which knows how to handle partial packets that
+     * straddle multiple read() calls. */
     if (G.state == PHDP_STATE_MONITORING) {
-        /* Raw console mode: all new bytes go to log.
-         * Reboot detection happens when poll sees no data for 2+ seconds
-         * and then receives a valid BOOT_ALIVE packet. */
-        const uint8_t *new_data = G.uart_rx + G.uart_rx_len - (uint32_t)n;
-        logv("[console] %zd bytes: %.*s\n", n, (int)(n > 60 ? 60 : n), (const char *)new_data);
-        log_ring_write((const char *)new_data, (uint32_t)n);
-        log_ring_broadcast((const char *)new_data, (uint32_t)n);
-        G.uart_rx_len = 0;
-    } else {
-        uart_process_rx();
-        /* After EXEC_START processing, flush leftover RX buffer */
-        if (G.monitoring_flush_pending && G.state == PHDP_STATE_MONITORING) {
-            G.uart_rx_len = 0;
-            G.monitoring_flush_pending = 0;
+        uint32_t stx_off = G.uart_rx_len;
+        for (uint32_t i = 0; i < G.uart_rx_len; i++) {
+            if (G.uart_rx[i] == PHDP_STX) { stx_off = i; break; }
         }
+        if (stx_off > 0) {
+            /* Console-pass prefix (or whole buffer if no STX). */
+            (void)!write(STDOUT_FILENO, G.uart_rx, stx_off);
+            log_ring_write((const char *)G.uart_rx, stx_off);
+            log_ring_broadcast((const char *)G.uart_rx, stx_off);
+            memmove(G.uart_rx, G.uart_rx + stx_off, G.uart_rx_len - stx_off);
+            G.uart_rx_len -= stx_off;
+        }
+        if (G.uart_rx_len > 0) {
+            /* Buffer now starts with STX — try to parse packets.
+             * uart_process_rx leaves partial packets in the buffer
+             * for the next read(). */
+            uart_process_rx();
+        }
+        return 0;
+    }
+
+    uart_process_rx();
+    /* After EXEC_START processing, flush leftover RX buffer */
+    if (G.monitoring_flush_pending && G.state == PHDP_STATE_MONITORING) {
+        G.uart_rx_len = 0;
+        G.monitoring_flush_pending = 0;
     }
     return 0;
 }
@@ -841,8 +944,9 @@ static void ipc_handle_reset(int client_fd) {
 
 static void ipc_handle_wait(int client_idx) {
     if (G.state == PHDP_STATE_MONITORING) {
-        /* Already executing — respond immediately */
-        uint8_t ok = 1;
+        /* Already executing — respond immediately. 0 = success
+         * (phdp.c cmd_wait treats result==0 as EXIT_OK). */
+        uint8_t ok = 0;
         (void)write(G.clients[client_idx].fd, &ok, 1);
     } else {
         /* Mark client as waiting */
@@ -875,15 +979,31 @@ static void ipc_handle_logs(int client_idx, const phdp_ipc_req_t *req) {
     }
 }
 
+static const char *ipc_cmd_name(uint8_t cmd) {
+    switch (cmd) {
+    case PHDP_IPC_STATUS: return "STATUS";
+    case PHDP_IPC_PUSH:   return "PUSH";
+    case PHDP_IPC_CLEAR:  return "CLEAR";
+    case PHDP_IPC_RESET:  return "RESET";
+    case PHDP_IPC_WAIT:   return "WAIT";
+    case PHDP_IPC_LOGS:   return "LOGS";
+    default:              return "?";
+    }
+}
+
 static void ipc_handle_command(int client_idx) {
     phdp_ipc_req_t req;
     memset(&req, 0, sizeof(req));
 
     ssize_t n = read(G.clients[client_idx].fd, &req, sizeof(req));
     if (n <= 0) {
+        tracev("[ipc] client %d disconnected (read=%zd)\n", client_idx, n);
         ipc_remove_client(client_idx);
         return;
     }
+
+    tracev("[ipc] client %d: %s slot=%u arg=%u path='%.40s'\n",
+           client_idx, ipc_cmd_name(req.cmd), req.slot, req.arg, req.path);
 
     switch (req.cmd) {
     case PHDP_IPC_STATUS:
@@ -950,6 +1070,7 @@ static void ipc_accept(void) {
         const char *err = "ERR: too many clients\n";
         (void)write(fd, err, strlen(err));
         close(fd);
+        tracev("[ipc] rejected client (max=%d)\n", MAX_CLIENTS);
         return;
     }
 
@@ -960,6 +1081,7 @@ static void ipc_accept(void) {
     memset(&G.clients[G.num_clients], 0, sizeof(ipc_client_t));
     G.clients[G.num_clients].fd = fd;
     G.num_clients++;
+    tracev("[ipc] client %d accepted (total=%d)\n", G.num_clients - 1, G.num_clients);
 }
 
 /* ── Timeout handling ───────────────────────────────────────── */
@@ -982,14 +1104,33 @@ static void try_uart_connect(void) {
         G.uart_fd = fd;
         G.uart_rx_len = 0;
         set_state(PHDP_STATE_LISTENING);
+        /* Log even at -v level so the very first thing the user sees
+         * after `Starting phdpd...` is whether we got the device — the
+         * #1 question when nothing else appears later. */
         logv("[uart] opened %s at %d baud\n", G.uart_path, G.baud);
+        return;
+    }
+
+    /* uart_open() failed — surface why so the user can act on it.
+     * This is rate-limited by the auto-reconnect throttle in the main
+     * loop (every 2s), so it won't spam. */
+    static int last_errno = 0;
+    if (errno != last_errno) {
+        logv("[uart] open %s failed: %s\n", G.uart_path, strerror(errno));
+        last_errno = errno;
     }
 }
 
 /* ── Main event loop ────────────────────────────────────────── */
 
 static void usage(const char *prog) {
-    fprintf(stderr, "usage: %s [-d /dev/ttyUSB0] [-b 2000000] [-v]\n", prog);
+    fprintf(stderr,
+        "usage: %s [-d /dev/ttyUSB0] [-b 2000000] [-v] [-t]\n"
+        "  -d PATH    UART device (default /dev/ttyUSB0)\n"
+        "  -b BAUD    UART baud rate (default 2000000)\n"
+        "  -v         verbose: state, packet headers, stream progress\n"
+        "  -t         trace: -v + per-byte hex dumps + IPC events + timestamps\n",
+        prog);
     exit(1);
 }
 
@@ -998,16 +1139,18 @@ int main(int argc, char **argv) {
     G.uart_path = "/dev/ttyUSB0";
     G.baud      = PHDP_DEFAULT_BAUD;
     G.verbose   = false;
+    G.trace     = false;
     G.uart_fd   = -1;
     G.listen_fd = -1;
     G.state     = PHDP_STATE_DISCONNECTED;
 
     int opt;
-    while ((opt = getopt(argc, argv, "d:b:vh")) != -1) {
+    while ((opt = getopt(argc, argv, "d:b:vth")) != -1) {
         switch (opt) {
         case 'd': G.uart_path = optarg; break;
         case 'b': G.baud = atoi(optarg); break;
         case 'v': G.verbose = true; break;
+        case 't': G.trace = true; G.verbose = true; break;  /* trace implies verbose */
         default:  usage(argv[0]);
         }
     }

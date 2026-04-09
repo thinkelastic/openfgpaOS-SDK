@@ -39,6 +39,15 @@
 void test_psram_memory(void) {
     section_start("PSRAM Mem");
 
+    /* This whole test bangs on hardcoded CRAM/SRAM addresses that
+     * only exist on the Pocket target. On any other platform we
+     * skip cleanly so the suite still completes. */
+    if (of_get_caps()->platform_id != OF_PLATFORM_POCKET) {
+        test_pass("not pocket");
+        section_end();
+        return;
+    }
+
     volatile uint32_t *cram0 = (volatile uint32_t *)(CRAM0_CACHED_BASE + CRAM0_TEST_OFFSET);
     volatile uint32_t *cram1 = (volatile uint32_t *)(CRAM1_UNCACHED_BASE + CRAM1_TEST_OFFSET);
     volatile uint32_t *sram  = (volatile uint32_t *)SRAM_BASE;
@@ -90,13 +99,51 @@ void test_psram_memory(void) {
     ASSERT("cram1 w/r[1]", cram1[1] == 0x9ABCDEF0);
 
     {
+        /* Snapshot the test region so the test is fully idempotent.
+         * No CRAM1 region is truly idle across iterations: saves are
+         * bridge-persisted, file-IO scratch and I/O cache are touched
+         * by file ops, samples are touched by the mixer, the audio
+         * scratch tail is touched by the streamer. Whatever was here
+         * before us is restored on the way out, and the OS sees no
+         * disturbance from one iteration to the next.
+         *
+         * 16 KB lives in BSS (SDRAM), not on the BRAM stack. */
+        static uint32_t cram1_save[4096];
+        for (uint32_t i = 0; i < 4096; i++)
+            cram1_save[i] = cram1[i];
+
         int ok = 1;
+        uint32_t fail_at = 0, fail_exp = 0, fail_got = 0;
         for (uint32_t i = 0; i < 4096; i++)
             cram1[i] = ~i;
         for (uint32_t i = 0; i < 4096; i++) {
-            if (cram1[i] != ~i) { ok = 0; break; }
+            uint32_t got = cram1[i];
+            uint32_t exp = ~i;
+            if (got != exp) {
+                ok = 0;
+                fail_at = i;
+                fail_exp = exp;
+                fail_got = got;
+                break;
+            }
         }
-        ASSERT("cram1 16K", ok);
+
+        /* Restore original contents BEFORE asserting so the failure
+         * detail printf doesn't allocate / call into anything that
+         * might re-touch CRAM1 with the test pattern still in place. */
+        for (uint32_t i = 0; i < 4096; i++)
+            cram1[i] = cram1_save[i];
+
+        if (ok) {
+            test_pass("cram1 16K");
+        } else {
+            snprintf(__buf, sizeof(__buf),
+                     "@%lu e%08lx g%08lx",
+                     (unsigned long)fail_at,
+                     (unsigned long)fail_exp,
+                     (unsigned long)fail_got);
+            test_fail("cram1 16K", __buf);
+        }
     }
 
     sram[0] = 0xFEEDFACE;
@@ -146,6 +193,12 @@ void test_psram_memory(void) {
 
 void test_cram0_256k(void) {
     section_start("CRAM0 256K");
+
+    if (of_get_caps()->platform_id != OF_PLATFORM_POCKET) {
+        test_pass("not pocket");
+        section_end();
+        return;
+    }
 
     /* Uncached 32-bit write then read */
     {

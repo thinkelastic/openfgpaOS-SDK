@@ -172,7 +172,14 @@ void test_mixer_adv(void) {
             usleep(20 * 1000);
             ASSERT("MA.06b pre", of_mixer_voice_active(v));
             of_mixer_retrigger(v, (const uint8_t *)s16_buf, ADV_TONE_LEN, 11025, 150);
-            usleep(10 * 1000);
+            /* Sleep just long enough for the mixer to process the
+             * retrigger and start advancing. ADV_TONE_LEN=551 at
+             * 11025 Hz = 50 ms total playback, so the half-mark is
+             * ~25 ms after retrigger — the old 10 ms sleep + the
+             * inactive/get_position call overhead pushed pos right
+             * to that boundary and randomly tipped over. 2 ms gives
+             * ~22 samples played, well under ADV_TONE_LEN/2 = 275. */
+            usleep(2 * 1000);
             ASSERT("MA.06c post", of_mixer_voice_active(v));
             /* After retrigger, position should be near start */
             int pos = of_mixer_get_position(v);
