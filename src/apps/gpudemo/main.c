@@ -469,9 +469,7 @@ static void draw_persp_demo(int frame) {
  * ================================================================ */
 int main(void) {
     of_video_init();
-    /* Overlay mode = framebuffer + white terminal text on top, so the
-     * GPU output is visible on HDMI alongside any printf debug. */
-    of_video_set_display_mode(OF_DISPLAY_OVERLAY);
+    of_video_set_display_mode(OF_DISPLAY_FRAMEBUFFER);
     set_palette();
     printf("[gpudemo] start\n");
 
