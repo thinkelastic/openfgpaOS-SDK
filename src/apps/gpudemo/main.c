@@ -20,7 +20,6 @@
 #include <math.h>
 #include "of.h"
 #include "of_cache.h"
-#define OF_GPU_DEBUG_RING   /* heartbeat print inside _gpu_ring_ensure spin */
 #include "of_gpu.h"
 
 #define SCREEN_W 320
@@ -137,16 +136,9 @@ static void set_palette(void) {
 /* ================================================================
  * Span Demo: Doom-style textured walls + floor
  * ================================================================ */
-/* Per-frame FB setup. We CPU-side clear the entire 320x240 framebuffer
- * instead of using the hardware GPU CLEAR command, because on real
- * hardware the GPU's AXI write→read transition (M1 → M0) is buggy: a
- * long write burst from CLEAR leaves the SDRAM arbiter or slave in a
- * state where the very next AXI read (the texture cache miss for the
- * first DRAW_SPAN's first pixel) never returns. CPU memset uses the
- * normal CPU AXI master (M2), which we know works. cache_clean_range
- * flushes the dirty CPU lines so the GPU sees the cleared bytes when
- * it reads the framebuffer. (TODO: fix the M1→M0 hang in the SDRAM
- * arbiter / slave; see arbitration comments in axi_sdram_arbiter.v.) */
+/* Per-frame FB setup. CPU clears the framebuffer (SDRAM via M2) and
+ * flushes the dirty cache lines back so the GPU sees the cleared
+ * bytes when it reads the framebuffer back from M0/M1. */
 static void prepare_fb(uint8_t *fb, uint8_t color) {
     memset(fb, color, SCREEN_W * SCREEN_H);
     OF_SVC->cache_clean_range(fb, SCREEN_W * SCREEN_H);
@@ -154,44 +146,30 @@ static void prepare_fb(uint8_t *fb, uint8_t color) {
 }
 
 static void draw_span_demo(int frame) {
-    int trace = (frame < 3);
-    if (trace) printf("[span] enter frame=%d\n", frame);
-
     uint8_t *fb = of_video_surface();
     uint32_t fb_addr = (uint32_t)(uintptr_t)fb;
     uint32_t tex_addr = (uint32_t)(uintptr_t)wall_tex;
     uint32_t floor_addr = (uint32_t)(uintptr_t)checkerboard_tex;
-    if (trace) printf("[span] fb=%p tex=%p floor=%p\n", fb, wall_tex, checkerboard_tex);
 
     prepare_fb(fb, 0x10);
-    if (trace) printf("[span] prepare_fb done\n");
 
-    /* Draw vertical wall columns (Doom R_DrawColumn style) */
+    /* Doom-style vertical wall columns (R_DrawColumn). Each column is
+     * a single SPAN with fb_stride=SCREEN_W; the GPU's pipelined frag
+     * processor walks T through the 64×64 wall texture per pixel. */
     int wall_h = 80 + sin_lut[frame & 255] / 8;
     if (wall_h < 20) wall_h = 20;
     if (wall_h > 180) wall_h = 180;
     int wall_top = (SCREEN_H - wall_h) / 2;
 
     for (int x = 0; x < SCREEN_W; x++) {
-        /* Trace ONLY the first few columns. */
-        if (trace && (x == 0 || x == 1 || x == 2 || x == 3)) {
-            uint32_t rd = GPU_RING_RDPTR;
-            uint32_t st = GPU_STATUS;
-            printf("[s] BEFORE x=%d r=%lu st=%lu busy=%lu\n",
-                   x, (unsigned long)rd,
-                   (unsigned long)((st >> 2) & 0x3F),
-                   (unsigned long)(st & 1));
-        }
-        int light = (x * 40 / SCREEN_W);  /* darken towards edges */
-        /* Column walks T (row) through the 64×64 texture, S (col) is fixed.
-         * tex_width=64: addr = base + (t>>16)*64 + (s>>16) */
+        int light = (x * 40 / SCREEN_W);
         of_gpu_span_t col = {
             .fb_addr   = fb_addr + wall_top * SCREEN_W + x,
             .tex_addr  = tex_addr,
-            .s         = ((x + frame) & 63) << 16,  /* fixed U column */
-            .t         = 0,                           /* start at row 0 */
-            .sstep     = 0,                           /* S doesn't change */
-            .tstep     = (64 << 16) / wall_h,        /* T walks down */
+            .s         = ((x + frame) & 63) << 16,
+            .t         = 0,
+            .sstep     = 0,
+            .tstep     = (64 << 16) / wall_h,
             .count     = wall_h,
             .light     = light,
             .flags     = OF_GPU_SPAN_COLORMAP | OF_GPU_SPAN_COLUMN,
@@ -199,36 +177,7 @@ static void draw_span_demo(int frame) {
             .tex_width = 64,
         };
         of_gpu_draw_span(&col);
-        if (trace && (x == 0 || x == 1 || x == 2 || x == 3))
-            printf("[s] DRAW   x=%d done, kicking\n", x);
-
-        /* Manual kick + busy poll, no FENCE. Mirrors the standalone
-         * diagnostic that worked end-to-end. of_gpu_finish() (which
-         * queues a CMD_FENCE and polls GPU_FENCE_REACHED) hangs on
-         * the very first column even though the SAME draw_span
-         * parameters worked in the diagnostic. */
-        of_gpu_kick();
-        {
-            uint32_t spins = 0;
-            while ((GPU_STATUS & 1) || ((GPU_STATUS & 2) == 0)) {
-                /* busy=bit0, ring_empty=bit1 — exit when both clear */
-                if (++spins == 5000000) {
-                    uint32_t st = GPU_STATUS;
-                    printf("[s] x=%d STUCK st=0x%lx state=%lu busy=%lu emp=%lu fps=%lu\n",
-                           x, (unsigned long)st,
-                           (unsigned long)((st >> 2) & 0x3F),
-                           (unsigned long)(st & 1),
-                           (unsigned long)((st >> 1) & 1),
-                           (unsigned long)((st >> 12) & 1));
-                    spins = 0;
-                }
-            }
-        }
-        if (trace && (x == 0 || x == 1 || x == 2 || x == 3))
-            printf("[s] WAIT   x=%d ok\n", x);
     }
-
-    if (trace) printf("[span] walls submitted, starting floor\n");
 
     /* Draw floor spans */
     for (int y = wall_top + wall_h; y < SCREEN_H; y++) {
@@ -251,8 +200,6 @@ static void draw_span_demo(int frame) {
         };
         of_gpu_draw_span(&span);
     }
-
-    if (trace) printf("[span] floor submitted, starting sprite\n");
 
     /* SKIP_ZERO sprite overlay — bouncing transparent circle. The texel
      * value 0xFF marks transparent pixels and the GPU drops them at the
@@ -283,9 +230,7 @@ static void draw_span_demo(int frame) {
         }
     }
 
-    if (trace) printf("[span] all spans submitted, calling gpu_finish\n");
     of_gpu_finish();
-    if (trace) printf("[span] gpu_finish returned\n");
 }
 
 /* ================================================================
@@ -524,7 +469,9 @@ static void draw_persp_demo(int frame) {
  * ================================================================ */
 int main(void) {
     of_video_init();
-    of_video_set_display_mode(OF_DISPLAY_TERMINAL);
+    /* Overlay mode = framebuffer + white terminal text on top, so the
+     * GPU output is visible on HDMI alongside any printf debug. */
+    of_video_set_display_mode(OF_DISPLAY_OVERLAY);
     set_palette();
     printf("[gpudemo] start\n");
 
@@ -579,27 +526,32 @@ int main(void) {
 
     printf("[gpudemo] entering main loop — A = cycle mode\n");
 
-    int mode = 0;  /* 0 = spans+sprite, 1 = triangle cube, 2 = persp */
+    /* Mode 0 = Doom-style spans + sprite (LITE supported)
+     * Mode 1 = Perspective-correct triangle (SPAN_PERSP, LITE supported)
+     *
+     * The Pocket ships GPU_VARIANT_LITE, which has the pipelined
+     * fragment processor and the perspective span path but NOT the
+     * triangle rasteriser (GPU_FEAT_TRIANGLE is FULL-only). So the
+     * rotating cube in draw_triangle_demo() is skipped on this target. */
+    int mode = 0;
     int frame = 0;
+    int auto_switch_at = 600;  /* swap modes every ~10s */
 
     while (1) {
         of_input_poll();
-        if (of_btn_pressed(OF_BTN_A)) {
-            mode = (mode + 1) % 3;
-            printf("[gpudemo] switched to mode %d\n", mode);
+        if (of_btn_pressed(OF_BTN_A) || frame == auto_switch_at) {
+            mode = (mode + 1) % 2;
+            auto_switch_at = frame + 600;
+            printf("[gpudemo] mode -> %d\n", mode);
         }
 
-        if (frame < 5 || (frame % 60) == 0)
-            printf("[gpudemo] frame=%d mode=%d enter draw\n", frame, mode);
+        if (frame % 60 == 0)
+            printf("[gpudemo] frame=%d mode=%d\n", frame, mode);
 
         switch (mode) {
-            case 0: draw_span_demo(frame);     break;
-            case 1: draw_triangle_demo(frame); break;
-            case 2: draw_persp_demo(frame);    break;
+            case 0: draw_span_demo(frame);  break;
+            case 1: draw_persp_demo(frame); break;
         }
-
-        if (frame < 5 || (frame % 60) == 0)
-            printf("[gpudemo] frame=%d draw returned, flipping\n", frame);
 
         of_video_flip();
         frame++;
