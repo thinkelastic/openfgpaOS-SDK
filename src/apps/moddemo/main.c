@@ -6,8 +6,8 @@
  *   2. Reads pattern data and updates voice registers at tick rate
  *   3. Computes effects (portamento, volume slide, arpeggio) in software
  *
- * Loads MOD file from data slot 3.
- * Press A to pause/resume, B to skip to next pattern.
+ * Loads MOD files from data slots 3 and 4.
+ * Press A to switch songs, B to skip to next pattern.
  */
 
 #include "of.h"
@@ -99,13 +99,38 @@ typedef struct {
     /* Effect state */
     uint16_t target_period;  /* portamento to note target */
     int      porta_speed;
+    int      porta_up;       /* 1xx portamento up speed */
+    int      porta_down;     /* 2xx portamento down speed */
     int      vol_slide;
     int      arp_note;       /* base note index */
     uint8_t  arp_x, arp_y;
+    /* Vibrato / Tremolo */
+    int      vib_speed;      /* 4xy: x = speed */
+    int      vib_depth;      /* 4xy: y = depth */
+    int      vib_pos;        /* vibrato phase (0-63) */
+    int      trem_speed;     /* 7xy: x = speed */
+    int      trem_depth;     /* 7xy: y = depth */
+    int      trem_pos;       /* tremolo phase (0-63) */
+    /* Extended effects */
+    uint8_t  effect;         /* current effect number */
+    uint8_t  effect_param;   /* current effect parameter */
+    int      note_delay;     /* EDx: ticks to delay note */
+    int      note_cut;       /* ECx: tick at which to cut */
+    int      retrig;         /* E9x: retrigger interval */
+    int      loop_row;       /* E6x: pattern loop start row */
+    int      loop_count;     /* E6x: remaining loop iterations */
+    /* Delayed note data */
+    uint16_t delay_period;
+    uint8_t  delay_sample;
 } channel_t;
 
 static channel_t channels[MOD_NUM_CHANNELS];
-static mod_file_t mod;
+
+#define MAX_SONGS 2
+static mod_file_t songs[MAX_SONGS];
+static int num_songs = 0;
+static int cur_song = 0;
+static mod_file_t *mod;
 
 /* Default panning: LRRL (Amiga stereo) */
 static const int default_pan[4] = { 64, 192, 192, 64 };
@@ -118,7 +143,7 @@ static uint16_t read_be16(const uint8_t *p) {
     return (p[0] << 8) | p[1];
 }
 
-static int parse_mod(const uint8_t *data, uint32_t len) {
+static int parse_mod(mod_file_t *m, const uint8_t *data, uint32_t len) {
     if (len < 1084) return -1;
 
     /* Check for M.K. signature at offset 1080 */
@@ -131,53 +156,53 @@ static int parse_mod(const uint8_t *data, uint32_t len) {
     }
 
     /* Title */
-    memcpy(mod.title, data, 20);
-    mod.title[20] = '\0';
-    printf("Title: %s\n", mod.title);
+    memcpy(m->title, data, 20);
+    m->title[20] = '\0';
+    printf("Title: %s\n", m->title);
 
     /* Sample descriptors */
     const uint8_t *p = data + 20;
     for (int i = 0; i < MOD_NUM_SAMPLES; i++) {
-        memcpy(mod.samples[i].name, p, 22);
-        mod.samples[i].name[22] = '\0';
-        mod.samples[i].length      = read_be16(p + 22) * 2;
-        mod.samples[i].finetune    = p[24] & 0x0F;
-        if (mod.samples[i].finetune > 7) mod.samples[i].finetune -= 16;
-        mod.samples[i].volume      = p[25];
-        mod.samples[i].loop_start  = read_be16(p + 26) * 2;
-        mod.samples[i].loop_length = read_be16(p + 28) * 2;
+        memcpy(m->samples[i].name, p, 22);
+        m->samples[i].name[22] = '\0';
+        m->samples[i].length      = read_be16(p + 22) * 2;
+        m->samples[i].finetune    = p[24] & 0x0F;
+        if (m->samples[i].finetune > 7) m->samples[i].finetune -= 16;
+        m->samples[i].volume      = p[25];
+        m->samples[i].loop_start  = read_be16(p + 26) * 2;
+        m->samples[i].loop_length = read_be16(p + 28) * 2;
         p += 30;
     }
 
     /* Song info */
-    mod.song_length  = data[950];
-    mod.restart_pos  = data[951];
-    memcpy(mod.order, data + 952, 128);
+    m->song_length  = data[950];
+    m->restart_pos  = data[951];
+    memcpy(m->order, data + 952, 128);
 
     /* Count patterns (highest pattern number in order table + 1) */
-    mod.num_patterns = 0;
-    for (int i = 0; i < mod.song_length; i++)
-        if (mod.order[i] >= mod.num_patterns)
-            mod.num_patterns = mod.order[i] + 1;
+    m->num_patterns = 0;
+    for (int i = 0; i < m->song_length; i++)
+        if (m->order[i] >= m->num_patterns)
+            m->num_patterns = m->order[i] + 1;
 
-    printf("Patterns: %d, Length: %d\n", mod.num_patterns, mod.song_length);
+    printf("Patterns: %d, Length: %d\n", m->num_patterns, m->song_length);
 
     /* Pattern data starts at offset 1084 */
-    mod.pattern_data = (uint8_t *)(data + 1084);
+    m->pattern_data = (uint8_t *)(data + 1084);
 
     /* Sample data follows patterns */
-    uint32_t sample_offset = 1084 + mod.num_patterns * MOD_ROWS_PER_PAT * MOD_NUM_CHANNELS * 4;
+    uint32_t sample_offset = 1084 + m->num_patterns * MOD_ROWS_PER_PAT * MOD_NUM_CHANNELS * 4;
 
     /* Upload samples to CRAM1, converting 8-bit signed → 16-bit signed.
      * The hardware mixer expects 16-bit samples via of_mixer_play. */
     for (int i = 0; i < MOD_NUM_SAMPLES; i++) {
-        uint32_t slen = mod.samples[i].length;
+        uint32_t slen = m->samples[i].length;
         if (slen == 0) {
-            mod.sample_data[i] = NULL;
+            m->sample_data[i] = NULL;
             continue;
         }
         if (sample_offset + slen > len) {
-            mod.sample_data[i] = NULL;
+            m->sample_data[i] = NULL;
             continue;
         }
 
@@ -185,7 +210,7 @@ static int parse_mod(const uint8_t *data, uint32_t len) {
         int16_t *cram = (int16_t *)of_mixer_alloc_samples(slen * 2);
         if (!cram) {
             printf("CRAM1 full at sample %d\n", i + 1);
-            mod.sample_data[i] = NULL;
+            m->sample_data[i] = NULL;
             continue;
         }
         /* Convert 8-bit signed → 16-bit signed */
@@ -193,7 +218,7 @@ static int parse_mod(const uint8_t *data, uint32_t len) {
         for (uint32_t j = 0; j < slen; j++)
             cram[j] = (int16_t)src[j] << 8;
 
-        mod.sample_data[i] = (int8_t *)cram;
+        m->sample_data[i] = (int8_t *)cram;
         sample_offset += slen;
     }
 
@@ -206,7 +231,7 @@ static int parse_mod(const uint8_t *data, uint32_t len) {
 
 static mod_note_t read_note(int pattern, int row, int channel) {
     uint32_t offset = (pattern * MOD_ROWS_PER_PAT * MOD_NUM_CHANNELS + row * MOD_NUM_CHANNELS + channel) * 4;
-    const uint8_t *p = mod.pattern_data + offset;
+    const uint8_t *p = mod->pattern_data + offset;
     mod_note_t n;
     n.sample = (p[0] & 0xF0) | (p[2] >> 4);
     n.period = ((p[0] & 0x0F) << 8) | p[1];
@@ -225,64 +250,99 @@ static int current_tick = 0;
 static int ticks_per_row = 6;     /* default MOD speed */
 static int bpm = 125;             /* default MOD tempo */
 static int playing = 1;
-static int pattern_break = 0;     /* set by effect 0xD to prevent double-break */
+static int pattern_break = 0;     /* set by effect 0xD/0xB to prevent double-break */
+static int pattern_delay = 0;     /* EEx: extra row repeats remaining */
+
+/* Trigger (or retrigger) the current sample on a channel */
+static void trigger_note(channel_t *c, uint16_t period, int sample_offset) {
+    c->period = period;
+    c->rate_fp16 = period_to_rate_fp16(period);
+    c->arp_note = period_to_note(period);
+
+    int si = c->sample_idx - 1;
+    if (si >= 0 && mod->sample_data[si]) {
+        mod_sample_t *s = &mod->samples[si];
+        int vol = c->volume * 255 / 64;
+        int offset_bytes = sample_offset * 256;  /* 9xx: offset in 256-byte units, ×2 for 16-bit */
+        if (offset_bytes >= (int)s->length) offset_bytes = 0;
+
+        if (c->voice >= 0)
+            of_mixer_stop(c->voice);
+        c->voice = of_mixer_play((const uint8_t *)mod->sample_data[si] + offset_bytes * 2,
+                                 s->length - offset_bytes,
+                                 AMIGA_CLOCK / (period * 2), 0, vol);
+
+        if (c->voice >= 0) {
+            if (s->loop_length > 2) {
+                int ls = s->loop_start - offset_bytes;
+                if (ls < 0) ls = 0;
+                of_mixer_set_loop(c->voice, ls, ls + (int)s->loop_length);
+                of_mixer_set_volume_ramp(c->voice, 8);
+            }
+            of_mixer_set_pan(c->voice, c->pan);
+        }
+    }
+}
+
+/* Vibrato sine table (64 entries, 0-255) */
+static const uint8_t vib_table[64] = {
+      0, 24, 49, 74, 97,120,141,161,180,197,212,224,235,244,250,253,
+    255,253,250,244,235,224,212,197,180,161,141,120, 97, 74, 49, 24,
+      0, 24, 49, 74, 97,120,141,161,180,197,212,224,235,244,250,253,
+    255,253,250,244,235,224,212,197,180,161,141,120, 97, 74, 49, 24,
+};
 
 static void play_note(int ch, mod_note_t *n) {
     channel_t *c = &channels[ch];
 
+    /* Store effect for tick processing */
+    c->effect = n->effect;
+    c->effect_param = n->param;
+
+    /* Reset per-row state */
+    c->vol_slide = 0;
+    c->porta_up = 0;
+    c->porta_down = 0;
+    c->arp_x = 0;
+    c->arp_y = 0;
+    c->note_delay = 0;
+    c->note_cut = -1;
+    c->retrig = 0;
+
     /* New sample? */
     if (n->sample > 0 && n->sample <= MOD_NUM_SAMPLES) {
         c->sample_idx = n->sample;
-        c->volume = mod.samples[n->sample - 1].volume;
+        c->volume = mod->samples[n->sample - 1].volume;
+    }
+
+    /* Handle EDx (note delay) — save note, don't trigger yet */
+    if (n->effect == 0xE && (n->param >> 4) == 0xD) {
+        c->note_delay = n->param & 0xF;
+        c->delay_period = n->period;
+        c->delay_sample = n->sample;
+        goto parse_effects;
     }
 
     /* New note? */
-    if (n->period > 0 && n->effect != 0x3) {  /* 0x3 = portamento to note, don't restart */
-        c->period = n->period;
-        c->rate_fp16 = period_to_rate_fp16(n->period);
-        c->arp_note = period_to_note(n->period);
-
-        int si = c->sample_idx - 1;
-        if (si >= 0 && mod.sample_data[si]) {
-            mod_sample_t *s = &mod.samples[si];
-            int vol = c->volume * 255 / 64;
-
-            /* Always stop + play to guarantee clean voice state.
-             * Retrigger doesn't reset the playback position, so
-             * switching from a long sample to a short one leaves
-             * the position past the new sample's end → silent. */
-            if (c->voice >= 0)
-                of_mixer_stop(c->voice);
-            c->voice = of_mixer_play((const uint8_t *)mod.sample_data[si],
-                                     s->length, AMIGA_CLOCK / (n->period * 2),
-                                     0, vol);
-
-            if (c->voice >= 0) {
-                /* Set up loop if sample has one. For non-looping samples,
-                 * don't call set_loop — of_mixer_play defaults to "play
-                 * to end, no loop." Calling set_loop(-1, 0) overwrites
-                 * the end point to 0 and kills the sample immediately. */
-                if (s->loop_length > 2) {
-                    of_mixer_set_loop(c->voice, s->loop_start,
-                                      s->loop_start + s->loop_length);
-                    of_mixer_set_volume_ramp(c->voice, 8);
-                }
-
-                /* Apply channel pan */
-                of_mixer_set_pan(c->voice, c->pan);
-            }
-        }
-    } else if (n->period > 0 && n->effect == 0x3) {
-        /* Portamento to note — set target, don't restart sample */
+    if (n->period > 0 && n->effect != 0x3 && n->effect != 0x5) {
+        int sample_offset = (n->effect == 0x9) ? n->param : 0;
+        trigger_note(c, n->period, sample_offset);
+        c->vib_pos = 0;  /* reset vibrato phase on new note */
+    } else if (n->period > 0 && (n->effect == 0x3 || n->effect == 0x5)) {
         c->target_period = n->period;
     }
 
-    /* Parse effect — reset per-tick state, keep persistent values */
-    c->vol_slide = 0;
-    c->arp_x = 0;
-    c->arp_y = 0;
-    if (n->effect == 0x3 && n->param)
-        c->porta_speed = n->param;  /* porta speed is sticky */
+parse_effects:
+    /* Sticky parameters */
+    if (n->effect == 0x3 && n->param) c->porta_speed = n->param;
+    if (n->effect == 0x4) {
+        if (n->param >> 4) c->vib_speed = n->param >> 4;
+        if (n->param & 0xF) c->vib_depth = n->param & 0xF;
+    }
+    if (n->effect == 0x7) {
+        if (n->param >> 4) c->trem_speed = n->param >> 4;
+        if (n->param & 0xF) c->trem_depth = n->param & 0xF;
+    }
 
     switch (n->effect) {
     case 0x0:  /* Arpeggio */
@@ -291,8 +351,33 @@ static void play_note(int ch, mod_note_t *n) {
             c->arp_y = n->param & 0xF;
         }
         break;
+    case 0x1:  /* Portamento up */
+        c->porta_up = n->param;
+        break;
+    case 0x2:  /* Portamento down */
+        c->porta_down = n->param;
+        break;
+    case 0x5:  /* Porta to note + volume slide */
+        c->vol_slide = (n->param >> 4) - (n->param & 0xF);
+        break;
+    case 0x6:  /* Vibrato + volume slide */
+        c->vol_slide = (n->param >> 4) - (n->param & 0xF);
+        break;
+    case 0x8:  /* Set panning */
+        c->pan = n->param;
+        if (c->voice >= 0) of_mixer_set_pan(c->voice, c->pan);
+        break;
     case 0xA:  /* Volume slide */
         c->vol_slide = (n->param >> 4) - (n->param & 0xF);
+        break;
+    case 0xB:  /* Position jump */
+        if (!pattern_break) {
+            current_order = n->param;
+            if (current_order >= mod->song_length)
+                current_order = 0;
+            current_row = -1;
+            pattern_break = 1;
+        }
         break;
     case 0xC:  /* Set volume */
         c->volume = n->param;
@@ -302,11 +387,60 @@ static void play_note(int ch, mod_note_t *n) {
         if (!pattern_break) {
             int break_row = (n->param >> 4) * 10 + (n->param & 0xF);
             if (break_row >= MOD_ROWS_PER_PAT) break_row = 0;
-            current_row = break_row - 1;  /* -1 because tick advance will +1 */
+            current_row = break_row - 1;
             current_order++;
-            if (current_order >= mod.song_length)
-                current_order = mod.restart_pos;
+            if (current_order >= mod->song_length)
+                current_order = mod->restart_pos;
             pattern_break = 1;
+        }
+        break;
+    case 0xE:  /* Extended effects */
+        switch (n->param >> 4) {
+        case 0x1:  /* Fine portamento up */
+            c->period -= n->param & 0xF;
+            if (c->period < 113) c->period = 113;
+            c->rate_fp16 = period_to_rate_fp16(c->period);
+            break;
+        case 0x2:  /* Fine portamento down */
+            c->period += n->param & 0xF;
+            if (c->period > 856) c->period = 856;
+            c->rate_fp16 = period_to_rate_fp16(c->period);
+            break;
+        case 0x5:  /* Set finetune */
+            if (c->sample_idx > 0)
+                mod->samples[c->sample_idx - 1].finetune = (n->param & 0xF) > 7
+                    ? (int8_t)((n->param & 0xF) - 16) : (int8_t)(n->param & 0xF);
+            break;
+        case 0x6:  /* Pattern loop */
+            if ((n->param & 0xF) == 0) {
+                c->loop_row = current_row;  /* set loop start */
+            } else {
+                if (c->loop_count == 0)
+                    c->loop_count = n->param & 0xF;
+                else
+                    c->loop_count--;
+                if (c->loop_count > 0)
+                    current_row = c->loop_row - 1;  /* -1: tick advance will +1 */
+            }
+            break;
+        case 0x9:  /* Retrigger note */
+            c->retrig = n->param & 0xF;
+            break;
+        case 0xA:  /* Fine volume slide up */
+            c->volume += n->param & 0xF;
+            if (c->volume > 64) c->volume = 64;
+            break;
+        case 0xB:  /* Fine volume slide down */
+            c->volume -= n->param & 0xF;
+            if (c->volume < 0) c->volume = 0;
+            break;
+        case 0xC:  /* Note cut */
+            c->note_cut = n->param & 0xF;
+            break;
+        case 0xE:  /* Pattern delay */
+            if (pattern_delay == 0)
+                pattern_delay = n->param & 0xF;
+            break;
         }
         break;
     case 0xF:  /* Set speed/tempo */
@@ -320,6 +454,26 @@ static void play_note(int ch, mod_note_t *n) {
 
 static void tick_effects(int ch) {
     channel_t *c = &channels[ch];
+
+    /* Note delay — trigger on the right tick */
+    if (c->note_delay > 0 && current_tick == c->note_delay) {
+        if (c->delay_period > 0)
+            trigger_note(c, c->delay_period, 0);
+        c->note_delay = 0;
+    }
+
+    /* Note cut */
+    if (c->note_cut >= 0 && current_tick == c->note_cut) {
+        c->volume = 0;
+        c->note_cut = -1;
+    }
+
+    /* Retrigger */
+    if (c->retrig > 0 && current_tick > 0 && (current_tick % c->retrig) == 0) {
+        if (c->period > 0)
+            trigger_note(c, c->period, 0);
+    }
+
     if (c->voice < 0) return;
 
     /* Arpeggio */
@@ -330,8 +484,25 @@ static void tick_effects(int ch) {
             c->rate_fp16 = period_to_rate_fp16(period_table[note]);
     }
 
-    /* Portamento to note — do math in int to avoid uint16 underflow */
-    if (c->porta_speed && c->target_period) {
+    /* Portamento up (1xx) */
+    if (c->porta_up) {
+        int p = (int)c->period - c->porta_up;
+        if (p < 113) p = 113;
+        c->period = (uint16_t)p;
+        c->rate_fp16 = period_to_rate_fp16(c->period);
+    }
+
+    /* Portamento down (2xx) */
+    if (c->porta_down) {
+        int p = (int)c->period + c->porta_down;
+        if (p > 856) p = 856;
+        c->period = (uint16_t)p;
+        c->rate_fp16 = period_to_rate_fp16(c->period);
+    }
+
+    /* Portamento to note (3xx / 5xx) */
+    if (c->porta_speed && c->target_period &&
+        (c->effect == 0x3 || c->effect == 0x5)) {
         int p = (int)c->period;
         int t = (int)c->target_period;
         if (p > t) {
@@ -345,7 +516,35 @@ static void tick_effects(int ch) {
         c->rate_fp16 = period_to_rate_fp16(c->period);
     }
 
-    /* Volume slide */
+    /* Vibrato (4xx / 6xx) */
+    if (c->vib_depth && (c->effect == 0x4 || c->effect == 0x6)) {
+        int delta = (vib_table[c->vib_pos & 63] * c->vib_depth) >> 7;
+        /* Apply vibrato: oscillate around c->period */
+        uint16_t vib_period;
+        if (c->vib_pos < 32)
+            vib_period = c->period + delta;
+        else
+            vib_period = c->period - delta;
+        c->rate_fp16 = period_to_rate_fp16(vib_period);
+        c->vib_pos = (c->vib_pos + c->vib_speed) & 63;
+    }
+
+    /* Tremolo (7xy) */
+    if (c->trem_depth && c->effect == 0x7) {
+        int delta = (vib_table[c->trem_pos & 63] * c->trem_depth) >> 6;
+        if (c->trem_pos >= 32) delta = -delta;
+        int tv = c->volume + delta;
+        if (tv < 0) tv = 0;
+        if (tv > 64) tv = 64;
+        /* Tremolo modulates output volume but doesn't change c->volume */
+        int vol_l = (tv * 255 / 64 * (255 - c->pan)) >> 8;
+        int vol_r = (tv * 255 / 64 * c->pan) >> 8;
+        if (c->voice >= 0)
+            of_mixer_set_voice_raw(c->voice, c->rate_fp16, vol_l, vol_r);
+        c->trem_pos = (c->trem_pos + c->trem_speed) & 63;
+    }
+
+    /* Volume slide (Axy / 5xy / 6xy) */
     if (c->vol_slide) {
         c->volume += c->vol_slide;
         if (c->volume < 0) c->volume = 0;
@@ -383,7 +582,7 @@ static void process_tick(void) {
     if (current_tick == 0) {
         /* Row tick: read new notes */
         pattern_break = 0;
-        int pattern = mod.order[current_order];
+        int pattern = mod->order[current_order];
         for (int ch = 0; ch < MOD_NUM_CHANNELS; ch++) {
             mod_note_t n = read_note(pattern, current_row, ch);
             play_note(ch, &n);
@@ -401,12 +600,17 @@ static void process_tick(void) {
     current_tick++;
     if (current_tick >= ticks_per_row) {
         current_tick = 0;
-        current_row++;
-        if (current_row >= MOD_ROWS_PER_PAT) {
-            current_row = 0;
-            current_order++;
-            if (current_order >= mod.song_length)
-                current_order = mod.restart_pos;
+        /* EEx pattern delay: repeat current row for extra ticks */
+        if (pattern_delay > 0) {
+            pattern_delay--;
+        } else {
+            current_row++;
+            if (current_row >= MOD_ROWS_PER_PAT) {
+                current_row = 0;
+                current_order++;
+                if (current_order >= mod->song_length)
+                    current_order = mod->restart_pos;
+            }
         }
     }
 }
@@ -422,64 +626,44 @@ int main(void) {
     /* Initialize mixer */
     of_mixer_init(32, OF_MIXER_OUTPUT_RATE);
 
-    /* Load MOD from data slot 3 */
-    printf("Loading MOD from slot 3...\n");
+    /* Load MOD files from slots 3 and 4 */
+    static const char *slot_names[] = { "slot:3", "slot:4" };
+    static uint8_t *file_bufs[MAX_SONGS];
+    (void)file_bufs;  /* kept alive so pattern_data pointers remain valid */
 
-    FILE *f = fopen("slot:3", "rb");
-    if (!f) {
-        printf("No MOD file in data slot 3.\n");
-        printf("Add a .mod file to your core's data.json as slot 3.\n");
-        for (;;) usleep(100000);
-    }
+    for (int s = 0; s < MAX_SONGS; s++) {
+        printf("Loading MOD from %s...\n", slot_names[s]);
+        FILE *f = fopen(slot_names[s], "rb");
+        if (!f) { printf("  not found, skipping\n"); continue; }
 
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    printf("File size: %ld bytes\n", size);
+        fseek(f, 0, SEEK_END);
+        long size = ftell(f);
+        fseek(f, 0, SEEK_SET);
 
-    if (size <= 0) {
-        printf("Slot 3 is empty (size=%ld).\n", size);
-        printf("Ensure your instance JSON maps slot 3 to a .mod file\n");
-        printf("and the file is in Assets/openfpgaos/common/\n");
+        if (size < 1084) { printf("  too small, skipping\n"); fclose(f); continue; }
+
+        uint8_t *data = (uint8_t *)malloc(size);
+        if (!data) { printf("  out of memory\n"); fclose(f); continue; }
+
+        size_t got = fread(data, 1, size, f);
         fclose(f);
-        for (;;) usleep(100000);
-    }
-    if (size < 1084) {
-        printf("File too small for MOD (%ld bytes)\n", size);
-        fclose(f);
-        for (;;) usleep(100000);
-    }
 
-    uint8_t *data = (uint8_t *)malloc(size);
-    if (!data) {
-        printf("Out of memory\n");
-        fclose(f);
-        for (;;) usleep(100000);
+        if (parse_mod(&songs[num_songs], data, (uint32_t)got) == 0) {
+            file_bufs[num_songs] = data;  /* keep alive — pattern_data points into it */
+            num_songs++;
+        } else {
+            free(data);
+        }
     }
 
-    size_t got = fread(data, 1, size, f);
-    fclose(f);
-    printf("Read %u of %ld bytes\n", (unsigned)got, size);
-
-    if ((long)got < size) {
-        printf("Short read — file may be corrupt\n");
-    }
-
-    /* Debug: print signature bytes at offset 1080 */
-    if (got >= 1084) {
-        printf("Signature: %c%c%c%c (0x%02x%02x%02x%02x)\n",
-               data[1080], data[1081], data[1082], data[1083],
-               data[1080], data[1081], data[1082], data[1083]);
-    }
-
-    if (parse_mod(data, (uint32_t)got) < 0) {
-        printf("Failed to parse MOD\n");
+    if (num_songs == 0) {
+        printf("No valid MOD files found in slots 3-4.\n");
         for (;;) usleep(100000);
     }
 
-    /* NOTE: can't free(data) — mod.pattern_data points into it.
-     * Sample data was copied to CRAM1, but pattern data is read
-     * directly from the file buffer during playback. */
+    printf("Loaded %d song(s)\n", num_songs);
+    cur_song = 0;
+    mod = &songs[cur_song];
 
     /* Initialize channels */
     for (int i = 0; i < MOD_NUM_CHANNELS; i++) {
@@ -493,7 +677,7 @@ int main(void) {
     printf("Tick rate: %d Hz (BPM=%d, speed=%d)\n", tick_hz, bpm, ticks_per_row);
     of_timer_set_callback(mod_timer_tick, tick_hz);
 
-    printf("\nPlaying... A=pause B=next pattern\n");
+    printf("\nPlaying... A=next song B=next pattern\n");
     printf("Waiting for first tick...\n");
 
     /* Display loop */
@@ -524,24 +708,32 @@ int main(void) {
 
             of_input_poll();
 
-            if (of_btn_pressed(OF_BTN_A)) {
-                playing = !playing;
-                if (!playing) {
-                    of_mixer_stop_all();
-                    for (int i = 0; i < MOD_NUM_CHANNELS; i++)
-                        channels[i].voice = -1;
-                }
+            if (of_btn_pressed(OF_BTN_A) && num_songs > 1) {
+                /* Switch song */
+                of_mixer_stop_all();
+                for (int i = 0; i < MOD_NUM_CHANNELS; i++)
+                    channels[i].voice = -1;
+                cur_song = (cur_song + 1) % num_songs;
+                mod = &songs[cur_song];
+                current_order = 0;
+                current_row = 0;
+                current_tick = 0;
+                ticks_per_row = 6;
+                bpm = 125;
+                tick_hz = (bpm * 2) / 5;
+                of_timer_set_callback(mod_timer_tick, tick_hz);
+                printf("\n>>> Song %d: %s\n", cur_song + 1, mod->title);
             }
             if (of_btn_pressed(OF_BTN_B)) {
                 current_row = 0;
                 current_tick = 0;
                 current_order++;
-                if (current_order >= mod.song_length)
+                if (current_order >= mod->song_length)
                     current_order = 0;
             }
 
-            printf("\rOrd:%02d Pat:%02d Row:%02d Spd:%d BPM:%d ",
-                   current_order, mod.order[current_order],
+            printf("\rSong:%d Ord:%02d Pat:%02d Row:%02d Spd:%d BPM:%d ",
+                   cur_song + 1, current_order, mod->order[current_order],
                    current_row, ticks_per_row, bpm);
         }
 

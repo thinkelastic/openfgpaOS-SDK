@@ -287,14 +287,17 @@ static int load_midi_file(void) {
     return 0;
 }
 
+/* Mode: 0 = MIDI file player, 1 = instrument diagnostic, 2 = raw OPL3 */
+#define MODE_PLAY  0
+#define MODE_DIAG  1
+#define MODE_RAW   2
+
 int main(void) {
     printf("\033[2J\033[H");
-    printf("    openfpgaOS MIDI Diagnostic\n");
-    printf("    ==========================\n\n");
+    printf("    openfpgaOS MIDI Demo\n");
+    printf("    ====================\n\n");
 
     build_all_diag();
-    printf(" Built %u inst + %u raw\n",
-           (unsigned)DIAG_INST_COUNT, (unsigned)RAW_PATCH_COUNT);
 
     int rc = of_midi_init();
     if (rc < 0) {
@@ -302,108 +305,147 @@ int main(void) {
         while (1) {}
     }
 
-    printf("\n LEFT/RIGHT  = prev/next\n");
-    printf(" UP/DOWN     = midi/raw mode\n");
-    printf(" X/Y         = octave down/up (raw)\n");
-    printf(" START       = auto-advance toggle\n");
-    printf(" A           = replay current\n");
-    printf(" L1/R1       = volume\n\n");
+    /* Try to load MIDI file from data slot 3 */
+    int have_midi = (load_midi_file() == 0);
+    if (have_midi)
+        printf(" MIDI file: %u bytes\n", (unsigned)midi_len);
+    else
+        printf(" No MIDI file in slot 3\n");
 
-    int idx = 0;
-    int raw_mode = 0;       /* 0 = of_midi instruments, 1 = raw OPL3 patches */
-    int auto_advance = 1;
+    printf(" %u instruments + %u raw patches\n",
+           (unsigned)DIAG_INST_COUNT, (unsigned)RAW_PATCH_COUNT);
+
+    int mode = have_midi ? MODE_PLAY : MODE_DIAG;
     int volume = 255;
+    int paused = 0;
+    int idx = 0;
+    int auto_advance = 1;
     uint32_t note_start_ms = 0;
 
-    /* Start the first instrument */
-    of_midi_play(diag_inst[idx].buf, diag_inst[idx].len, 0);
-    note_start_ms = of_time_ms();
-    printf("\033[14;2H >>> %-30s\n", diag_inst[idx].name);
+    printf("\n SELECT=switch mode  L1/R1=volume\n");
+    printf(" Play: START=pause A=restart\n");
+    printf(" Diag: LEFT/RIGHT=prev/next START=auto A=replay\n");
+    printf(" Raw:  LEFT/RIGHT=prev/next X/Y=octave\n\n");
+
+    goto enter_mode;
 
     while (1) {
         of_input_poll();
         of_input_state_t state;
         of_input_state(0, &state);
 
-        int change_inst = -1;
-        int max_idx = raw_mode ? RAW_PATCH_COUNT : DIAG_INST_COUNT;
-
-        if (state.buttons_pressed & OF_BTN_RIGHT) {
-            change_inst = (idx + 1) % max_idx;
-        }
-        if (state.buttons_pressed & OF_BTN_LEFT) {
-            change_inst = (idx + max_idx - 1) % max_idx;
-        }
-        if (state.buttons_pressed & OF_BTN_A) {
-            change_inst = idx;
-        }
-        if (state.buttons_pressed & (OF_BTN_UP | OF_BTN_DOWN)) {
-            /* Toggle mode */
-            if (raw_mode) raw_key_off();
+        /* SELECT = switch mode */
+        if (state.buttons_pressed & OF_BTN_SELECT) {
+            /* Stop current mode */
+            if (mode == MODE_RAW) raw_key_off();
             else of_midi_stop();
-            raw_mode = !raw_mode;
+            paused = 0;
             idx = 0;
-            change_inst = 0;
-            printf("\033[13;2H MODE: %-20s", raw_mode ? "RAW OPL3 (no midi)" : "MIDI engine");
-        }
-        if (state.buttons_pressed & OF_BTN_START) {
-            auto_advance = !auto_advance;
-            printf("\033[16;2H Auto: %s   ", auto_advance ? "ON " : "OFF");
-        }
-        if (state.buttons_pressed & OF_BTN_L1) {
-            volume -= 32;
-            if (volume < 0) volume = 0;
-            of_midi_set_volume(volume);
-            printf("\033[17;2H Vol: %3d/255  ", volume);
-        }
-        if (state.buttons_pressed & OF_BTN_R1) {
-            volume += 32;
-            if (volume > 255) volume = 255;
-            of_midi_set_volume(volume);
-            printf("\033[17;2H Vol: %3d/255  ", volume);
-        }
-        if (state.buttons_pressed & OF_BTN_X) {
-            raw_block = (raw_block + 7) & 0x07;  /* down */
-            if (raw_block > 7) raw_block = 0;
-            printf("\033[18;2H Octave (block): %d  ", raw_block);
-            change_inst = idx;  /* replay with new octave */
-        }
-        if (state.buttons_pressed & OF_BTN_Y) {
-            raw_block = (raw_block + 1) & 0x07;  /* up */
-            printf("\033[18;2H Octave (block): %d  ", raw_block);
-            change_inst = idx;  /* replay with new octave */
-        }
 
-        /* Auto-advance after ~2.5s */
-        if (auto_advance && change_inst < 0) {
-            uint32_t now = of_time_ms();
-            if (now - note_start_ms > 2500) {
-                change_inst = (idx + 1) % max_idx;
-            }
-        }
+            /* Cycle: play → diag → raw → play ... (skip play if no file) */
+            mode = (mode + 1) % 3;
+            if (mode == MODE_PLAY && !have_midi) mode = MODE_DIAG;
 
-        if (change_inst >= 0) {
-            if (raw_mode) {
-                raw_key_off();
-                idx = change_inst;
-                /* Full reset before each patch to clear any lingering
-                 * state from previous patches or modes. */
+enter_mode:
+            printf("\033[10;2H                                       ");
+            if (mode == MODE_PLAY) {
+                printf("\033[10;2H MODE: MIDI File Player");
+                of_midi_play(midi_buf, midi_len, 1);
+            } else if (mode == MODE_DIAG) {
+                printf("\033[10;2H MODE: Instrument Diagnostic");
+                of_midi_play(diag_inst[idx].buf, diag_inst[idx].len, 0);
+                note_start_ms = of_time_ms();
+            } else {
+                printf("\033[10;2H MODE: RAW OPL3");
                 of_audio_opl_reset();
-                of_audio_opl_write(0x105, 0x01);  /* OPL3 enable */
-                of_audio_opl_write(0x01, 0x20);   /* bank 0 WSE */
-                of_audio_opl_write(0x101, 0x20);  /* bank 1 WSE */
+                of_audio_opl_write(0x105, 0x01);
+                of_audio_opl_write(0x01, 0x20);
+                of_audio_opl_write(0x101, 0x20);
                 raw_program_ch0(&raw_patches[idx]);
                 raw_play_a4();
-                printf("\033[14;2H                                       ");
-                printf("\033[14;2H >>> %s\n", raw_patches[idx].name);
-            } else {
-                of_midi_stop();
-                idx = change_inst;
-                of_midi_play(diag_inst[idx].buf, diag_inst[idx].len, 0);
-                printf("\033[14;2H                                       ");
-                printf("\033[14;2H >>> %s\n", diag_inst[idx].name);
             }
-            note_start_ms = of_time_ms();
+            printf("\033[11;2H >>> %-30s",
+                   mode == MODE_PLAY ? "Playing MIDI file" :
+                   mode == MODE_DIAG ? diag_inst[idx].name :
+                   raw_patches[idx].name);
+        }
+
+        /* Volume (all modes) */
+        if (state.buttons_pressed & OF_BTN_L1) {
+            volume -= 32; if (volume < 0) volume = 0;
+            of_midi_set_volume(volume);
+            printf("\033[13;2H Vol: %3d/255  ", volume);
+        }
+        if (state.buttons_pressed & OF_BTN_R1) {
+            volume += 32; if (volume > 255) volume = 255;
+            of_midi_set_volume(volume);
+            printf("\033[13;2H Vol: %3d/255  ", volume);
+        }
+
+        /* Mode-specific controls */
+        if (mode == MODE_PLAY) {
+            if (state.buttons_pressed & OF_BTN_START) {
+                paused = !paused;
+                if (paused) of_midi_pause(); else of_midi_resume();
+                printf("\033[12;2H %s   ", paused ? "PAUSED " : "PLAYING");
+            }
+            if (state.buttons_pressed & OF_BTN_A) {
+                of_midi_stop();
+                of_midi_play(midi_buf, midi_len, 1);
+                paused = 0;
+                printf("\033[12;2H RESTART       ");
+            }
+        } else if (mode == MODE_DIAG) {
+            int change = -1;
+            if (state.buttons_pressed & OF_BTN_RIGHT)
+                change = (idx + 1) % (int)DIAG_INST_COUNT;
+            if (state.buttons_pressed & OF_BTN_LEFT)
+                change = (idx + (int)DIAG_INST_COUNT - 1) % (int)DIAG_INST_COUNT;
+            if (state.buttons_pressed & OF_BTN_A)
+                change = idx;
+            if (state.buttons_pressed & OF_BTN_START) {
+                auto_advance = !auto_advance;
+                printf("\033[12;2H Auto: %s   ", auto_advance ? "ON " : "OFF");
+            }
+            if (auto_advance && change < 0) {
+                uint32_t now = of_time_ms();
+                if (now - note_start_ms > 2500)
+                    change = (idx + 1) % (int)DIAG_INST_COUNT;
+            }
+            if (change >= 0) {
+                of_midi_stop();
+                idx = change;
+                of_midi_play(diag_inst[idx].buf, diag_inst[idx].len, 0);
+                note_start_ms = of_time_ms();
+                printf("\033[11;2H >>> %-30s", diag_inst[idx].name);
+            }
+        } else { /* MODE_RAW */
+            int change = -1;
+            if (state.buttons_pressed & OF_BTN_RIGHT)
+                change = (idx + 1) % (int)RAW_PATCH_COUNT;
+            if (state.buttons_pressed & OF_BTN_LEFT)
+                change = (idx + (int)RAW_PATCH_COUNT - 1) % (int)RAW_PATCH_COUNT;
+            if (state.buttons_pressed & OF_BTN_X) {
+                raw_block = (raw_block + 7) & 0x07;
+                printf("\033[12;2H Octave: %d  ", raw_block);
+                change = idx;
+            }
+            if (state.buttons_pressed & OF_BTN_Y) {
+                raw_block = (raw_block + 1) & 0x07;
+                printf("\033[12;2H Octave: %d  ", raw_block);
+                change = idx;
+            }
+            if (change >= 0) {
+                raw_key_off();
+                idx = change;
+                of_audio_opl_reset();
+                of_audio_opl_write(0x105, 0x01);
+                of_audio_opl_write(0x01, 0x20);
+                of_audio_opl_write(0x101, 0x20);
+                raw_program_ch0(&raw_patches[idx]);
+                raw_play_a4();
+                printf("\033[11;2H >>> %-30s", raw_patches[idx].name);
+            }
         }
 
         of_midi_pump();
