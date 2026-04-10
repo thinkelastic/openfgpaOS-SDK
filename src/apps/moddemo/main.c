@@ -247,36 +247,29 @@ static void play_note(int ch, mod_note_t *n) {
             mod_sample_t *s = &mod.samples[si];
             int vol = c->volume * 255 / 64;
 
-            if (c->voice >= 0) {
-                /* Retrigger in-place — Amiga-style, no stop/start gap */
-                of_mixer_retrigger(c->voice,
-                                   (const uint8_t *)mod.sample_data[si],
-                                   s->length, AMIGA_CLOCK / (n->period * 2),
-                                   vol);
-            } else {
-                /* First note on this channel — allocate a voice */
-                c->voice = of_mixer_play((const uint8_t *)mod.sample_data[si],
-                                         s->length, AMIGA_CLOCK / (n->period * 2),
-                                         0, vol);
-            }
+            /* Always stop + play to guarantee clean voice state.
+             * Retrigger doesn't reset the playback position, so
+             * switching from a long sample to a short one leaves
+             * the position past the new sample's end → silent. */
+            if (c->voice >= 0)
+                of_mixer_stop(c->voice);
+            c->voice = of_mixer_play((const uint8_t *)mod.sample_data[si],
+                                     s->length, AMIGA_CLOCK / (n->period * 2),
+                                     0, vol);
 
             if (c->voice >= 0) {
-                /* Set up loop if sample has one */
-                if (s->loop_length > 2)
+                /* Set up loop if sample has one. For non-looping samples,
+                 * don't call set_loop — of_mixer_play defaults to "play
+                 * to end, no loop." Calling set_loop(-1, 0) overwrites
+                 * the end point to 0 and kills the sample immediately. */
+                if (s->loop_length > 2) {
                     of_mixer_set_loop(c->voice, s->loop_start,
                                       s->loop_start + s->loop_length);
-                else
-                    of_mixer_set_loop(c->voice, -1, 0);
+                    of_mixer_set_volume_ramp(c->voice, 8);
+                }
 
                 /* Apply channel pan */
                 of_mixer_set_pan(c->voice, c->pan);
-
-                /* Hardware volume ramp: smooth for long/looping samples,
-                 * instant for short percussion to preserve attack. */
-                if (s->loop_length > 2 || s->length > 2000)
-                    of_mixer_set_volume_ramp(c->voice, 8);
-                else
-                    of_mixer_set_volume_ramp(c->voice, 0);
             }
         }
     } else if (n->period > 0 && n->effect == 0x3) {
@@ -533,7 +526,11 @@ int main(void) {
 
             if (of_btn_pressed(OF_BTN_A)) {
                 playing = !playing;
-                if (!playing) of_mixer_stop_all();
+                if (!playing) {
+                    of_mixer_stop_all();
+                    for (int i = 0; i < MOD_NUM_CHANNELS; i++)
+                        channels[i].voice = -1;
+                }
             }
             if (of_btn_pressed(OF_BTN_B)) {
                 current_row = 0;
