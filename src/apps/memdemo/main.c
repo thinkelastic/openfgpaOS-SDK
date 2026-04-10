@@ -20,12 +20,14 @@ static uint8_t dst_buf[1024 * 1024] __attribute__((aligned(64)));
 /* Prevent the compiler from optimizing away the operations */
 static volatile uint8_t sink;
 
-#define PSRAM_BASE  0x31000000
+/* CRAM0 app window starts at 0x30100000 (OS kernel occupies 0x30000000-0x30100000).
+ * We use 0x30200000 to leave 1MB headroom for the kernel and any app PIE fallback. */
+#define PSRAM_BASE  0x30200000
 #define SRAM_BASE   0x3A000000
 
 /* Uncached mirrors — bypass D-cache for raw bus throughput measurement */
 #define UNCACHED_SDRAM_OFF  0x40000000
-#define UNCACHED_PSRAM_OFF  0x08000000
+#define UNCACHED_PSRAM_OFF  0x08000000  /* 0x30 cached → 0x38 uncached */
 
 /* Test sizes: 256, 1K, 16K, 256K */
 static const uint32_t sizes[]  = { 256, 1024, 16384, 262144 };
@@ -241,9 +243,12 @@ static void run_sram(void) {
 
 static void run_bram(void) {
     void *dst = (void *)0x00002000;
-    void *src = (void *)0x00006000;
-    /* BRAM is ~55KB, max test size limited */
-    static const uint32_t bram_sizes[] = { 256, 1024, 16384 };
+    void *src = (void *)0x00004C00;
+    /* BRAM app window is 22KB [0x2000,0x7800). Two non-overlapping buffers
+     * of up to 11KB each: dst [0x2000,0x4C00), src [0x4C00,0x7800).
+     * 16KB test dropped — src+16K aliases past 0x8000 back to 0x0000,
+     * overwriting the trap handler. */
+    static const uint32_t bram_sizes[] = { 256, 1024, 8192 };
     static const int      bram_reps[]  = { 10000, 10000, 2000 };
     #define NUM_BRAM 3
     char r[NUM_SIZES][16];
