@@ -199,27 +199,33 @@ static const raw_patch_t raw_patches[] = {
       0x21, 0x00, 0xF0, 0x07, 0x03,
       0x0E },  /* FB=7, CNT=0 */
 
-    /* Plain sine carrier with HIGH feedback — should be very buzzy */
+    /* Moderate feedback — should sound buzzy/brassy, clearly tonal */
     { "RAW: hi fb sine",
       0x21, 0x00, 0xF0, 0x07, 0x00,
       0x21, 0x00, 0xF0, 0x07, 0x00,
-      0x0E },  /* FB=7, CNT=0 */
+      0x08 },  /* FB=4, CNT=0 */
 
-    /* High mod TL = 0 (max modulation depth), FB=7 — extreme metallic */
+    /* Stronger feedback — more metallic, some inharmonic content */
     { "RAW: ext metallic",
       0x21, 0x00, 0xF0, 0x0F, 0x00,
       0x21, 0x00, 0xF0, 0x0F, 0x00,
-      0x0E },
+      0x0A },  /* FB=5, CNT=0 */
 
-    /* Percussive envelope test: EGT=0 (percussive), fast release */
-    { "RAW: percussive",
-      0x01, 0x00, 0xF0, 0x0F, 0x00,  /* EGT=0 */
-      0x01, 0x00, 0xF0, 0x0F, 0x00,  /* EGT=0 */
+    /* EGT=0 A/B test: should decay from max → SL=2 → then slowly to silence */
+    { "RAW: EGT=0 slow",
+      0x01, 0x00, 0xF4, 0x22, 0x00,  /* EGT=0, DR=4, SL=2, RR=2 (slow) */
+      0x01, 0x00, 0xF4, 0x22, 0x00,
       0x01 },
 
-    /* Sustained vs same params with EGT=1 */
+    /* EGT=1 A/B test: same DR/SL — should decay to SL=2 then HOLD there */
+    { "RAW: EGT=1 slow",
+      0x21, 0x00, 0xF4, 0x22, 0x00,  /* EGT=1, DR=4, SL=2, RR=2 (slow) */
+      0x21, 0x00, 0xF4, 0x22, 0x00,
+      0x01 },
+
+    /* Sustained: no decay, holds at max volume */
     { "RAW: sustained",
-      0x21, 0x00, 0xF0, 0x05, 0x00,  /* EGT=1, RR=5 */
+      0x21, 0x00, 0xF0, 0x05, 0x00,  /* EGT=1, DR=0, SL=0, RR=5 */
       0x21, 0x00, 0xF0, 0x05, 0x00,
       0x01 },
 };
