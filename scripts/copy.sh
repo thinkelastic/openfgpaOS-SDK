@@ -25,25 +25,9 @@ if [ ! -d "$BUILD_DIR/Cores" ]; then
     exit 1
 fi
 
-# ── Find SD card ───────────────────────────────────────────────────
-find_pocket_sd() {
-    for mount in /run/media/"$USER"/* /Volumes/*; do
-        if [ -d "$mount/Cores" ] && [ -d "$mount/Assets" ]; then
-            echo "$mount"
-            return
-        fi
-    done
-}
-
+# ── Find / mount SD card ─────────────────────────────────────────────
 SDCARD="$1"
-if [ -z "$SDCARD" ]; then
-    SDCARD="$(find_pocket_sd)"
-    if [ -z "$SDCARD" ]; then
-        echo "Error: No Analogue Pocket SD card found"
-        echo "Usage: $0 [/path/to/sdcard]"
-        exit 1
-    fi
-fi
+source "$(dirname "$0")/sdcard.sh"
 
 echo "Deploying build/sdk/ to $SDCARD"
 

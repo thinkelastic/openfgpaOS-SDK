@@ -723,10 +723,12 @@ void test_file_limit(void) {
     section_start("File Limit");
 
     /*
-     * Stripped-down fopen/fclose cycle counter.
-     * The investigation says the CPU hard-stalls after ~35 cycles,
-     * correlated with time (~2-3s after boot).  Print every iteration
-     * with a timestamp so we see the exact limit.
+     * Stripped-down fopen/fclose cycle counter.  Earlier investigation
+     * noted "CPU hard-stalls after ~35 cycles" but that was actually
+     * a terminal-scroll bug in the instrumentation itself — a '\n'
+     * in the per-iteration trace was causing of_term_scroll() to
+     * trip an unrelated sync-burst hazard.  Without the '\n' emit
+     * (no trace at all) the loop runs to completion cleanly.
      */
     const int MAX_CYCLES = 100;
     int i;

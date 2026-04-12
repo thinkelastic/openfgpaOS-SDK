@@ -31,7 +31,7 @@ static volatile uint8_t sink;
 
 /* Test sizes: 256, 1K, 16K, 256K */
 static const uint32_t sizes[]  = { 256, 1024, 16384, 262144 };
-static const int      reps[]   = { 10000, 10000, 2000, 100 };
+static const int      reps[]   = { 1000, 1000, 200, 10 };
 #define NUM_SIZES 4
 
 static void fmt_mbps(char *out, int len, uint32_t size, uint32_t us, int r) {
@@ -249,7 +249,7 @@ static void run_bram(void) {
      * 16KB test dropped — src+16K aliases past 0x8000 back to 0x0000,
      * overwriting the trap handler. */
     static const uint32_t bram_sizes[] = { 256, 1024, 8192 };
-    static const int      bram_reps[]  = { 10000, 10000, 2000 };
+    static const int      bram_reps[]  = { 1000, 1000, 200 };
     #define NUM_BRAM 3
     char r[NUM_SIZES][16];
 
