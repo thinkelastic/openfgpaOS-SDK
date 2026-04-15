@@ -3,7 +3,7 @@
         "magic": "APF_VER_1",
         "data_slots": [
             {
-                "id": 9,
+                "id": 0,
                 "name": "Game",
                 "required": true,
                 "parameters": 275,
@@ -23,6 +23,14 @@
                 "required": false,
                 "parameters": 0,
                 "extensions": ["elf"],
+                "deferload": true
+            },
+            {
+                "id": 7,
+                "name": "Sound Bank",
+                "required": false,
+                "parameters": 0,
+                "extensions": ["ofsf"],
                 "deferload": true
             },
             {

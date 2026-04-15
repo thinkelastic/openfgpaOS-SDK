@@ -3,7 +3,7 @@
         "magic": "APF_VER_1",
         "data_slots": [
             {
-                "id": 9,
+                "id": 0,
                 "name": "Game",
                 "required": true,
                 "parameters": 275,
@@ -40,7 +40,7 @@
                 "name": "Data 2",
                 "required": false,
                 "parameters": 0,
-                "extensions": ["mid", "mod", "dat", "png", "bin", "grp", "pak", "wad", "rom", "nes"],
+                "extensions": ["mid", "mod", "ofsf", "dat", "png", "bin", "grp", "pak", "wad", "rom", "nes"],
                 "deferload": true
             },
             {
