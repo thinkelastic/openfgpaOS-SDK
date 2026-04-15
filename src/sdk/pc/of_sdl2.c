@@ -410,15 +410,6 @@ int of_audio_free(void) {
     return (AUDIO_BUF_SIZE - 1 - used) / 2;
 }
 
-void of_audio_opl_write(uint16_t reg, uint8_t val) {
-    (void)reg; (void)val;
-    /* OPL3 not emulated on PC -- stub */
-}
-
-void of_audio_opl_reset(void) {
-    /* stub */
-}
-
 /* ======================================================================
  * Timer
  * ====================================================================== */
