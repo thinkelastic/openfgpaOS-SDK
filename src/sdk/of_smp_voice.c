@@ -608,8 +608,12 @@ void smp_voice_tick(void)
         const ofsf_zone_t *z = v->zone;
 
         env_advance(&v->vol_env, z, 1);
+        env_advance(&v->vol_env, z, 1);
+        env_advance(&v->mod_env, z, 0);
         env_advance(&v->mod_env, z, 0);
         lfo_advance(&v->mod_lfo);
+        lfo_advance(&v->mod_lfo);
+        lfo_advance(&v->vib_lfo);
         lfo_advance(&v->vib_lfo);
 
         if (v->vol_env.stage == ENV_DONE) {
@@ -622,15 +626,12 @@ void smp_voice_tick(void)
 
         int vl, vr;
         compute_vol_lr(v, &vl, &vr);
-        if (vl != prev_vol_l[i] || vr != prev_vol_r[i]) {
-            of_mixer_set_vol_lr(v->mixer_voice, vl, vr);
+        uint32_t rate = compute_pitch(v);
+        if (vl != prev_vol_l[i] || vr != prev_vol_r[i] ||
+            rate != prev_rate[i]) {
+            of_mixer_set_voice_raw(v->mixer_voice, rate, vl, vr);
             prev_vol_l[i] = vl;
             prev_vol_r[i] = vr;
-        }
-
-        uint32_t rate = compute_pitch(v);
-        if (rate != prev_rate[i]) {
-            of_mixer_set_rate_raw(v->mixer_voice, rate);
             prev_rate[i] = rate;
         }
 

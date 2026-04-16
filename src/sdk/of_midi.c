@@ -376,10 +376,10 @@ void of_midi_pump(void) {
 
     if (elapsed > 0) {
         M.tick_accum_us += (uint32_t)elapsed;
-        int tick_budget = 500;
-        while (M.tick_accum_us >= 1000 && tick_budget > 0) {
+        int tick_budget = 250;
+        while (M.tick_accum_us >= 2000 && tick_budget > 0) {
             smp_voice_tick();
-            M.tick_accum_us -= 1000;
+            M.tick_accum_us -= 2000;
             tick_budget--;
         }
         if (tick_budget == 0)
