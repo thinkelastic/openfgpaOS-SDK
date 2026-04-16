@@ -349,52 +349,6 @@ static void voice_cleanup_stolen(void)
     }
 }
 
-/* Map software voice -> hardware mixer voice.
- * We manage our own mapping since SMP_MAX_VOICES may differ from HW count.
- * Hardware voices 0..44 are allocated round-robin (45-47 reserved for
- * streaming audio and of_audio_write scratch). */
-#define HW_MIDI_VOICES 45
-static int hw_voice_next;
-static int hw_voices[HW_MIDI_VOICES];
-
-static int hw_voice_alloc(void)
-{
-    /* Find a hardware voice not currently mapped to an active software voice */
-    for (int attempt = 0; attempt < HW_MIDI_VOICES; attempt++) {
-        int hv = hw_voice_next;
-        hw_voice_next = (hw_voice_next + 1) % HW_MIDI_VOICES;
-        int phys = hw_voices[hv];
-
-        if (phys < 0)
-            return hv;
-
-        int in_use = 0;
-        for (int i = 0; i < SMP_MAX_VOICES; i++) {
-            if (voices[i].active && voices[i].mixer_voice == phys) {
-                in_use = 1;
-                break;
-            }
-        }
-        if (!in_use)
-            return hv;
-    }
-    /* All hardware voices busy -- steal the round-robin candidate */
-    int hv = hw_voice_next;
-    hw_voice_next = (hw_voice_next + 1) % HW_MIDI_VOICES;
-    int phys = hw_voices[hv];
-
-    for (int i = 0; i < SMP_MAX_VOICES; i++) {
-        if (phys >= 0 && voices[i].active && voices[i].mixer_voice == phys) {
-            voices[i].active = 0;
-            voices[i].mixer_voice = -1;
-            break;
-        }
-    }
-    if (phys >= 0)
-        of_mixer_stop(phys);
-    return hv;
-}
-
 /* ------------------------------------------------------------------ */
 /* Exclusive class                                                    */
 /* ------------------------------------------------------------------ */
@@ -501,6 +455,8 @@ static uint32_t compute_pitch(smp_voice_t *v)
 
     if (cents_offset == 0)
         return v->base_rate_fp16;
+    if (cents_offset > 12000) cents_offset = 12000;
+    if (cents_offset < -12000) cents_offset = -12000;
 
     uint32_t mult = cents_to_rate_multiplier(cents_offset);
     return (uint32_t)(((uint64_t)v->base_rate_fp16 * mult) >> 16);
@@ -530,9 +486,6 @@ void smp_voice_init(void)
 
     master_vol = 255;
     tick_counter = 0;
-    hw_voice_next = 0;
-    for (int i = 0; i < HW_MIDI_VOICES; i++)
-        hw_voices[i] = -1;
 }
 
 int smp_voice_note_on(const ofsf_zone_t *zone, int midi_ch, int note,
@@ -549,18 +502,13 @@ int smp_voice_note_on(const ofsf_zone_t *zone, int midi_ch, int note,
 
     smp_voice_t *v = &voices[idx];
 
-    /* Allocate hardware mixer voice */
-    int hv = hw_voice_alloc();
-    if (hv < 0)
-        return -1;
-
     v->active = 1;
     v->zone = zone;
     v->midi_ch = (uint8_t)midi_ch;
     v->note = (uint8_t)note;
     v->velocity = (uint8_t)velocity;
     v->sustain_held = 0;
-    v->mixer_voice = hv;
+    v->mixer_voice = -1;
     v->age = tick_counter;
 
     /* Compute base playback rate:
@@ -659,15 +607,11 @@ void smp_voice_tick(void)
 
         const ofsf_zone_t *z = v->zone;
 
-        /* Advance envelopes */
         env_advance(&v->vol_env, z, 1);
         env_advance(&v->mod_env, z, 0);
-
-        /* Advance LFOs */
         lfo_advance(&v->mod_lfo);
         lfo_advance(&v->vib_lfo);
 
-        /* Check if voice is done */
         if (v->vol_env.stage == ENV_DONE) {
             if (v->mixer_voice >= 0)
                 of_mixer_stop(v->mixer_voice);
@@ -676,7 +620,6 @@ void smp_voice_tick(void)
             continue;
         }
 
-        /* Compute and apply volume (only write if changed) */
         int vl, vr;
         compute_vol_lr(v, &vl, &vr);
         if (vl != prev_vol_l[i] || vr != prev_vol_r[i]) {
@@ -685,7 +628,6 @@ void smp_voice_tick(void)
             prev_vol_r[i] = vr;
         }
 
-        /* Compute and apply pitch (only write if changed) */
         uint32_t rate = compute_pitch(v);
         if (rate != prev_rate[i]) {
             of_mixer_set_rate_raw(v->mixer_voice, rate);

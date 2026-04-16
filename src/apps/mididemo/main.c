@@ -271,29 +271,6 @@ int main(void) {
     printf(" Bank loaded (%.1f KB)\n",
            bhdr->sample_data_size / 1024.0f);
 
-    /* Raw bank playback test — bypass MIDI engine */
-    {
-        const ofsf_zone_t *zones[4];
-        const uint8_t *sbase = (const uint8_t *)of_smp_bank_sample_base();
-        const ofsf_header_t *hdr = of_smp_bank_get();
-        int n = of_smp_zone_lookup(0, 0, 60, 100, zones, 4);
-        printf(" Bank test: zones=%d sbase=%p\n", n, sbase);
-        if (n > 0 && sbase) {
-            const ofsf_zone_t *z = zones[0];
-            int v = of_mixer_play(sbase + z->sample_offset,
-                                  z->sample_length, hdr->sample_rate, 0, 200);
-            printf(" play voice=%d len=%lu sr=%lu\n",
-                   v, (unsigned long)z->sample_length,
-                   (unsigned long)hdr->sample_rate);
-            if (v >= 0) {
-                if (z->loop_mode == OFSF_LOOP_FORWARD || z->loop_mode == OFSF_LOOP_BIDI)
-                    of_mixer_set_loop(v, z->loop_start, z->loop_end);
-                usleep(2000 * 1000);
-                of_mixer_stop(v);
-            }
-        }
-    }
-
     /* Try to load MIDI file from data slot 3 */
     int have_midi = (load_midi_file() == 0);
     if (have_midi)
