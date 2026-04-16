@@ -7,6 +7,7 @@
 #include "include/of_smp_bank.h"
 #include "include/of_mixer.h"
 #include "include/of_cache.h"
+#include "include/of_timer.h"
 
 /* From of_smp_tables.c */
 extern const uint32_t smp_cents_to_mult[1200];
@@ -18,6 +19,50 @@ extern int32_t smp_timecents_to_ticks(int16_t tc);
 
 static smp_voice_t voices[SMP_MAX_VOICES];
 static uint32_t tick_counter;
+
+/* ------------------------------------------------------------------ */
+/* Tick-cost probe (Task #10)                                         */
+/* ------------------------------------------------------------------ */
+/* NOTE: VexRiscv here does not expose rdcycle to user mode, so we use
+ * of_time_us() (ecall to kernel) for timing. The ecall itself costs
+ * a few hundred cycles but that's a constant bias on the 2 ms scale
+ * we care about. Stats are stored in microseconds. */
+
+static uint32_t tick_us_max;
+static uint32_t tick_us_last;
+static uint32_t tick_spike_count;
+static uint32_t tick_stat_count;
+static uint8_t  tick_active_peak;
+static uint8_t  tick_stage_sustain;
+static uint8_t  tick_stage_release;
+static uint8_t  tick_stage_decay;
+static uint8_t  tick_sustain_held;
+
+/* 2 ms budget = 500 Hz tick rate. */
+#define SMP_TICK_SPIKE_US  2000u
+
+void smp_voice_tick_get_stats(smp_tick_stats_t *out)
+{
+    if (!out) return;
+    /* Note: field is named cycles_* for ABI stability but holds microseconds. */
+    out->cycles_max    = tick_us_max;
+    out->cycles_last   = tick_us_last;
+    out->spike_count   = tick_spike_count;
+    out->tick_count    = tick_stat_count;
+    out->active_peak   = tick_active_peak;
+    out->stage_sustain = tick_stage_sustain;
+    out->stage_release = tick_stage_release;
+    out->stage_decay   = tick_stage_decay;
+    out->sustain_held  = tick_sustain_held;
+}
+
+void smp_voice_tick_reset_stats(void)
+{
+    tick_us_max      = 0;
+    tick_spike_count = 0;
+    tick_stat_count  = 0;
+    tick_active_peak = 0;
+}
 
 /* Per-channel state (16 MIDI channels) */
 static int ch_volume[16];       /* CC7  (0-127) */
@@ -597,6 +642,13 @@ void smp_voice_note_off(int midi_ch, int note)
 
 void smp_voice_tick(void)
 {
+    uint32_t _probe_t0 = of_time_us();
+    uint8_t  _probe_active = 0;
+    uint8_t  _probe_sustain = 0;
+    uint8_t  _probe_release = 0;
+    uint8_t  _probe_decay = 0;
+    uint8_t  _probe_held = 0;
+
     tick_counter++;
     voice_cleanup_stolen();
 
@@ -604,6 +656,11 @@ void smp_voice_tick(void)
         smp_voice_t *v = &voices[i];
         if (!v->active || v->active == STEAL_PENDING)
             continue;
+        _probe_active++;
+        if (v->vol_env.stage == ENV_SUSTAIN) _probe_sustain++;
+        else if (v->vol_env.stage == ENV_RELEASE) _probe_release++;
+        else if (v->vol_env.stage == ENV_DECAY) _probe_decay++;
+        if (v->sustain_held) _probe_held++;
 
         const ofsf_zone_t *z = v->zone;
 
@@ -679,6 +736,17 @@ void smp_voice_tick(void)
             }
         }
     }
+
+    uint32_t _probe_dt = of_time_us() - _probe_t0;
+    tick_us_last = _probe_dt;
+    if (_probe_dt > tick_us_max) tick_us_max = _probe_dt;
+    if (_probe_dt > SMP_TICK_SPIKE_US) tick_spike_count++;
+    if (_probe_active > tick_active_peak) tick_active_peak = _probe_active;
+    tick_stage_sustain = _probe_sustain;
+    tick_stage_release = _probe_release;
+    tick_stage_decay   = _probe_decay;
+    tick_sustain_held  = _probe_held;
+    tick_stat_count++;
 }
 
 void smp_voice_update_volume(int midi_ch, int volume, int expression)

@@ -16,7 +16,11 @@ extern "C" {
 #include <stdint.h>
 #include "of_smp_bank.h"
 
-#define SMP_MAX_VOICES 48
+/* 28 = SC-55 polyphony standard. Hardware mixer has 47 usable slots
+ * but running at the full ~48 saturates the allocator — every note-on
+ * has to steal, causing constant click/truncate artifacts.  Keeping
+ * headroom lets voice_alloc find free or ENV_DONE slots cleanly. */
+#define SMP_MAX_VOICES 28
 
 typedef enum {
     ENV_OFF = 0, ENV_DELAY, ENV_ATTACK, ENV_HOLD,
@@ -60,6 +64,27 @@ int  smp_voice_note_on(const ofsf_zone_t *zone, int midi_ch, int note,
                        int velocity, const void *sample_base);
 void smp_voice_note_off(int midi_ch, int note);
 void smp_voice_tick(void);  /* 1 kHz ISR */
+
+/* Diagnostic stats for smp_voice_tick cost.  Task #10 probe: detect
+ * whether the tick exceeds its 2 ms budget (500 Hz tick rate).
+ * Fields are named cycles_* but actually hold microseconds — the
+ * VexRiscv here does not expose rdcycle to user mode, so of_time_us()
+ * (kernel ecall) is used instead. */
+typedef struct {
+    uint32_t cycles_max;     /* worst-case microseconds for a single tick */
+    uint32_t cycles_last;    /* microseconds of most recent tick */
+    uint32_t spike_count;    /* ticks where microseconds > 2000 */
+    uint32_t tick_count;     /* total ticks since reset */
+    uint8_t  active_peak;    /* max active voices seen since reset */
+    /* Stage histogram — snapshot at the most recent tick. */
+    uint8_t  stage_sustain;  /* voices in ENV_SUSTAIN (waiting for note-off) */
+    uint8_t  stage_release;  /* voices in ENV_RELEASE (fading out) */
+    uint8_t  stage_decay;    /* voices in ENV_DECAY (between attack and sustain) */
+    uint8_t  sustain_held;   /* voices with CC64 sustain pedal still holding them */
+} smp_tick_stats_t;
+
+void smp_voice_tick_get_stats(smp_tick_stats_t *out);
+void smp_voice_tick_reset_stats(void);
 void smp_voice_update_volume(int midi_ch, int volume, int expression);
 void smp_voice_update_pan(int midi_ch, int pan);
 void smp_voice_update_bend(int midi_ch, int bend);

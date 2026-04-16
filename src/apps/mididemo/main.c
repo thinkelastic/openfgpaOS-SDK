@@ -14,6 +14,7 @@
 
 #include "of.h"
 #include "of_smp_bank.h"
+#include "of_smp_voice.h"
 #include <time.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -287,6 +288,7 @@ int main(void) {
     int auto_advance = 1;
     int raw_octave = 0;
     uint32_t note_start_ms = 0;
+    uint32_t last_probe_ms = 0;
 
     printf("\n SELECT=switch mode  L1/R1=volume\n");
     printf(" Play: START=pause A=restart\n");
@@ -434,6 +436,24 @@ enter_mode:
 
         if (midi_ready)
             of_midi_pump();
+
+        /* Tick-cost probe: print stats every ~1 s.
+         * Budget is 2000 us (500 Hz tick rate). */
+        uint32_t now_ms = of_time_ms();
+        if (now_ms - last_probe_ms >= 1000) {
+            last_probe_ms = now_ms;
+            smp_tick_stats_t s;
+            smp_voice_tick_get_stats(&s);
+            printf("\033[17;2H tick max=%4u us last=%4u us spikes=%u/%u peak_v=%u  ",
+                   (unsigned)s.cycles_max, (unsigned)s.cycles_last,
+                   (unsigned)s.spike_count, (unsigned)s.tick_count,
+                   (unsigned)s.active_peak);
+            printf("\033[18;2H stages: sus=%u rel=%u dec=%u held=%u          ",
+                   (unsigned)s.stage_sustain, (unsigned)s.stage_release,
+                   (unsigned)s.stage_decay, (unsigned)s.sustain_held);
+            smp_voice_tick_reset_stats();
+        }
+
         usleep(1 * 1000);
     }
 
