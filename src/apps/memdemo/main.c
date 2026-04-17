@@ -20,12 +20,21 @@ static uint8_t dst_buf[1024 * 1024] __attribute__((aligned(64)));
 /* Prevent the compiler from optimizing away the operations */
 static volatile uint8_t sink;
 
-/* CRAM0 app window starts at 0x30100000 (OS kernel occupies 0x30000000-0x30100000).
- * We use 0x30200000 to leave 1MB headroom for the kernel and any app PIE fallback. */
-#define PSRAM_BASE  0x30200000
-/* Uncached mirrors — bypass D-cache for raw bus throughput measurement */
+/* CRAM0 is i_axi-only under the current PMA (see
+ * GenOpenFpgaVexii.scala — CRAM0 excluded from d_axi so the sync-burst
+ * refill path stays single-master).  All data-plane access to CRAM0
+ * must use the 0x38xxxxxx uncached alias, which routes through p_axi.
+ * Cached stores to 0x30xxxxxx trap with store-access-fault.
+ *
+ * The OS kernel occupies 0x30000000-0x30100000; we test at 0x38200000
+ * to leave 1MB headroom for the kernel and any app PIE fallback. */
+#define PSRAM_BASE  0x38200000   /* uncached alias — cached is forbidden */
+/* Uncached SDRAM mirror — bypass D-cache for raw bus throughput measurement.
+ * PSRAM no longer has a separate cached/uncached distinction at the CPU
+ * level (PMA-forbidden), so UNCACHED_PSRAM_OFF is 0 and the srd/u rows
+ * measure the same path as seq_rd. */
 #define UNCACHED_SDRAM_OFF  0x40000000
-#define UNCACHED_PSRAM_OFF  0x08000000  /* 0x30 cached → 0x38 uncached */
+#define UNCACHED_PSRAM_OFF  0           /* PSRAM is always uncached now */
 
 /* Test sizes: 256, 1K, 16K, 256K */
 static const uint32_t sizes[]  = { 256, 1024, 16384, 262144 };

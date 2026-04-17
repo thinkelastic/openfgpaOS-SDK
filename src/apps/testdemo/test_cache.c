@@ -533,47 +533,34 @@ void test_cache(void) {
 
 /* ================================================================
  * CRAM0 cache tests (C0.xx)
+ *
+ * These tests used to verify cbo.clean / cbo.inval on the CRAM0
+ * cached alias.  Under the current PMA (see GenOpenFpgaVexii.scala)
+ * CRAM0 is excluded from the d_axi bridge entirely — it is i_axi-only
+ * so that the sync-burst refill path stays single-master.  That means
+ * CRAM0 data is never cached by the D$, cbo operations on CRAM0
+ * addresses have no cached lines to act on, and cached stores to
+ * 0x30xxxxxx trap with a store-access-fault.
+ *
+ * The test is kept as a stub so downstream counters stay stable and
+ * the suite reports a meaningful "not applicable" instead of a crash.
  * ================================================================ */
 void test_cache_cram0(void) {
     section_start("Cache CRAM0");
     if (!cache_tests_supported()) { test_pass("not pocket"); section_end(); return; }
 
-    volatile uint32_t *c = (volatile uint32_t *)(CRAM0_CACHED + CRAM0_TEST_OFF);
+    /* Uncached write/read — the only supported data-plane access to CRAM0. */
     volatile uint32_t *u = (volatile uint32_t *)(CRAM0_UNCACHED + CRAM0_TEST_OFF);
+    u[0] = PAT_A;
+    __asm__ volatile("fence" ::: "memory");
+    ASSERT("C0.uc wr", u[0] == PAT_A);
 
-    /* C0.01: cbo.clean single word */
-    c[0] = PAT_A;
-    of_cache_clean_range((void *)(CRAM0_CACHED + CRAM0_TEST_OFF), 4);
-    ASSERT("C0.01 cln w", u[0] == PAT_A);
-
-    /* C0.02: cbo.clean 4KB */
+    for (uint32_t i = 0; i < 1024; i++) u[i] = i * 0x01010101;
+    __asm__ volatile("fence" ::: "memory");
     {
-        for (uint32_t i = 0; i < 1024; i++) c[i] = i * 0x01010101;
-        of_cache_clean_range((void *)(CRAM0_CACHED + CRAM0_TEST_OFF), 4096);
         int ok = 1;
         for (uint32_t i = 0; i < 1024; i++) if (u[i] != i * 0x01010101) { ok = 0; break; }
-        ASSERT("C0.02 cln 4K", ok);
-    }
-
-    /* C0.03: cbo.inval */
-    c[0] = PAT_A;
-    of_cache_clean_range((void *)(CRAM0_CACHED + CRAM0_TEST_OFF), 4);
-    u[0] = PAT_D;
-    of_cache_inval_range((void *)(CRAM0_CACHED + CRAM0_TEST_OFF), 4);
-    ASSERT("C0.03 inval", c[0] == PAT_D);
-
-    /* C0.04: conflict eviction */
-    c[0] = PAT_C;
-    evict_dcache();
-    ASSERT("C0.04 evict", u[0] == PAT_C);
-
-    /* C0.05: full flush */
-    {
-        for (int i = 0; i < 256; i++) c[i] = (uint32_t)i;
-        of_cache_flush();
-        int ok = 1;
-        for (int i = 0; i < 256; i++) if (u[i] != (uint32_t)i) { ok = 0; break; }
-        ASSERT("C0.05 flush", ok);
+        ASSERT("C0.uc 4K", ok);
     }
 
     section_end();
