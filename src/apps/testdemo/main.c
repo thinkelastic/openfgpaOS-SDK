@@ -268,8 +268,8 @@ int main(void) {
         printf("\n");
 
         if (any_fail_this_run) {
-            printf("  \033[91mFAILED\033[0m — Press A for details\n");
-            wait_press();
+            printf("  \033[91mFAILED\033[0m — details in 2s\n");
+            usleep(2000 * 1000);
             show_fail_summary();
             /* show_fail_summary's last page asked the user to retest —
              * restart the iteration loop from the top. */
