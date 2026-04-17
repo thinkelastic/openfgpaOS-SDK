@@ -434,11 +434,13 @@ enter_mode:
                 raw_play_inst(idx, diag_inst[idx].note + raw_octave * 12);
         }
 
-        if (midi_ready)
-            of_midi_pump();
-
         /* Tick-cost probe: print stats every ~1 s.
-         * Budget is 2000 us (500 Hz tick rate). */
+         * Budget is 2000 us (500 Hz tick rate).
+         *
+         * of_midi_pump() is now driven by the machine-timer ISR at 500 Hz
+         * (installed by of_midi_play), so printf stalls on the main thread
+         * no longer starve the mixer.  We must NOT call of_midi_pump() from
+         * here — doing so would race the ISR on M/voice state. */
         uint32_t now_ms = of_time_ms();
         if (now_ms - last_probe_ms >= 1000) {
             last_probe_ms = now_ms;
@@ -451,6 +453,40 @@ enter_mode:
             printf("\033[18;2H stages: sus=%u rel=%u dec=%u held=%u          ",
                    (unsigned)s.stage_sustain, (unsigned)s.stage_release,
                    (unsigned)s.stage_decay, (unsigned)s.sustain_held);
+            /* Per-channel active voice count + GM program number.
+             * Each channel prints as "Cc=Vp" where c=channel (0-F hex),
+             * V=voice count, p=program number.  Channels with 0 voices
+             * are hidden so only the currently-producing channels show. */
+            char chbuf[128];
+            int clen = 0;
+            for (int ch = 0; ch < 16 && clen < (int)sizeof(chbuf) - 12; ch++) {
+                if (s.ch_active[ch] == 0) continue;
+                clen += snprintf(chbuf + clen, sizeof(chbuf) - clen,
+                                 "%X:%u/%d ", ch,
+                                 (unsigned)s.ch_active[ch],
+                                 of_midi_get_program(ch));
+            }
+            printf("\033[19;2H ch(v/prg): %-80s", chbuf);
+            /* A/B/C instrumentation — MMIO + pump-interval + cutoff-delta.
+             * mmio: how many HW writes actually fired in the last second
+             *   (after the cache-skip guards).  Saturation shows up here.
+             * pump: intervals between of_midi_pump() calls; "brst" counts
+             *   pumps that fired >1 tick (ticks bursting) and "over"
+             *   counts pumps that blew the tick_budget (catch-up dropped).
+             * dFC: max single-tick cutoff jump in Q0.16 (0..65535); big
+             *   numbers → bigger SVF transients / audible zipper. */
+            unsigned pmin = (s.pump_interval_min_us == 0xFFFFFFFFu)
+                              ? 0u : s.pump_interval_min_us;
+            printf("\033[20;2H mmio: filt=%5u rate=%5u vol=%5u  dFC=%5u      ",
+                   (unsigned)s.filter_writes,
+                   (unsigned)s.rate_writes,
+                   (unsigned)s.vol_writes,
+                   (unsigned)s.cutoff_delta_max);
+            printf("\033[21;2H pump: n=%5u int=%u..%uus brst=%u over=%u      ",
+                   (unsigned)s.pump_count,
+                   pmin, (unsigned)s.pump_interval_max_us,
+                   (unsigned)s.pump_burst_count,
+                   (unsigned)s.pump_budget_exceeded);
             smp_voice_tick_reset_stats();
         }
 
