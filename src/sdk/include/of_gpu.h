@@ -162,15 +162,17 @@ static uint32_t _gpu_base;
 #define GPU_CMD_CLEAR           0x10
 #define GPU_CMD_SET_TEXTURE     0x20
 #define GPU_CMD_SET_DEPTH_FUNC  0x21
-#define GPU_CMD_SET_BLEND       0x22
 #define GPU_CMD_SET_FB          0x23
 #define GPU_CMD_SET_ZB          0x24
-#define GPU_CMD_SET_SHADE       0x25
-#define GPU_CMD_SET_ALPHA_REF   0x26
 #define GPU_CMD_DRAW_TRIANGLES  0x30
-#define GPU_CMD_DRAW_INDEXED    0x31
 #define GPU_CMD_DRAW_SPAN       0x40
-#define GPU_CMD_DRAW_SPANS      0x41
+/* Reserved opcodes — do not reuse:
+ *   0x22 SET_BLEND      — no combine path in the datapath
+ *   0x25 SET_SHADE      — Gouraud gradient dropped in the FMax push
+ *   0x26 SET_ALPHA_REF  — no alpha test in the datapath
+ *   0x31 DRAW_INDEXED   — expand indices CPU-side and emit per-triangle
+ *   0x41 DRAW_SPANS     — half-implemented batch; emit N separate spans
+ *   0x42 DRAW_SPRITE    — 2-triangle sprite is cheaper and rotates */
 
 /* ================================================================
  * Ring Buffer State (app-side)
@@ -201,10 +203,28 @@ static inline void _gpu_ring_ensure(uint32_t bytes) {
         ;
 }
 
+/* Mirror counter of GPU_RING_DATA writes — compared against the
+ * hardware's GPU_DBG_RINGWR (MMIO 0x38) to detect lost ring-BRAM
+ * MMIO writes.  Only accurate if nothing else writes GPU_RING_DATA
+ * (colormap upload uses a different register). */
+static uint32_t _gpu_ringwr_count;
+
 /* Write a word to the ring BRAM via MMIO (no cache issues). */
 static inline void _gpu_ring_write(uint32_t w) {
     GPU_RING_DATA = w;
     _gpu_wrptr = (_gpu_wrptr + 4) & _gpu_ring_mask;
+    _gpu_ringwr_count++;
+}
+
+/* Diagnostic: compare the app's submitted-word count against what the
+ * hardware has actually accepted.  If they disagree, some MMIO writes
+ * to GPU_RING_DATA were dropped on the way to the slave — trap
+ * immediately so the trap dump tells us exactly how many are missing. */
+static inline void of_gpu_verify_ringwr(void) {
+    uint32_t hw = *(volatile uint32_t *)0x4A000038u;  /* GPU_DBG_RINGWR */
+    if (hw != _gpu_ringwr_count) {
+        __builtin_trap();
+    }
 }
 
 static inline void _gpu_cmd_header(uint8_t cmd, uint32_t payload_words) {
@@ -245,6 +265,27 @@ static inline void of_gpu_kick(void) {
     GPU_RING_WRPTR = _gpu_wrptr;
 }
 
+/* Debug-only: verify the kick landed.  Reads GPU_RING_WRPTR back and
+ * traps if the hardware's wrptr doesn't match what we just wrote.  If
+ * a future hang comes back with "gpu_status=0 ring_empty=1 but I just
+ * submitted a fence", calling this right after of_gpu_kick() will
+ * surface a lost MMIO write immediately instead of waiting 2 seconds
+ * for the of_gpu_wait timeout. */
+static inline void of_gpu_kick_verified(void) {
+    /* First: confirm every GPU_RING_DATA write we made actually landed
+     * in the hardware's counter.  Lost ring-BRAM writes are the
+     * primary suspect for the gpudemo freeze — ring_empty goes true
+     * while fence_reached lags because garbage words in ring_bram
+     * look like NOP commands to the GPU and advance rdptr without
+     * ever hitting the fence we submitted. */
+    of_gpu_verify_ringwr();
+    GPU_RING_WRPTR = _gpu_wrptr;
+    uint32_t rb = GPU_RING_WRPTR & 0xFFFF;
+    if (rb != (_gpu_wrptr & 0xFFFF)) {
+        __builtin_trap();
+    }
+}
+
 static inline uint32_t of_gpu_fence(void) {
     uint32_t token = _gpu_fence_next++;
     _gpu_cmd_header(GPU_CMD_FENCE, 1);
@@ -254,7 +295,16 @@ static inline uint32_t of_gpu_fence(void) {
 
 static inline uint32_t of_gpu_submit(void) {
     uint32_t token = of_gpu_fence();
-    of_gpu_kick();
+    of_gpu_kick_verified();  /* verified kick: traps if GPU_RING_WRPTR
+                              * readback disagrees with _gpu_wrptr — a
+                              * lost MMIO write or a wrptr-masking bug
+                              * fires an illegal-instruction trap here
+                              * instead of waiting 5 s for of_gpu_wait's
+                              * timeout.  Switched in while chasing the
+                              * gpudemo freeze-after-N-frames issue:
+                              * fence_reached lags app token by exactly
+                              * 4 at trap time, ring_empty = 1 — the
+                              * handoff lost something. */
     return token;
 }
 
@@ -263,8 +313,28 @@ static inline int of_gpu_fence_reached(uint32_t token) {
 }
 
 static inline void of_gpu_wait(uint32_t token) {
-    while (!of_gpu_fence_reached(token))
-        ;
+    /* Bounded spin — if the GPU hangs (fb_acc never flushes, tex cache
+     * stuck in fill, pipeline deadlocked), the old unbounded spin
+     * silently froze the machine with no diagnostic.  Timeout triggers
+     * an illegal-instruction trap so fatal_trap dumps the GPU state;
+     * the registers to inspect on the trap side are:
+     *   GPU_STATUS    (0x14) — main state, pipeline flags, FBSS, tex
+     *   GPU_RING_RDPTR (0x10) — where the GPU last stopped fetching
+     *   GPU_DBG_BADWR  (0x30) — first stray M_WR address (GPU_DEBUG)
+     *
+     * Uses a plain iteration counter rather than a cycle CSR: this
+     * VexiiRiscv build is compiled without --performance-counters so
+     * rdcycle / mcycle both trap illegal-instruction (mtval=0xc8002873
+     * / 0xb8002873 observed).  Iteration count of 50M with a ~10-cycle
+     * body gives roughly ~5 s of wait at 100 MHz — generous enough
+     * that normal fence completions always beat it, tight enough that
+     * a genuine hang surfaces quickly. */
+    uint32_t spins = 50000000u;
+    while (!of_gpu_fence_reached(token)) {
+        if (--spins == 0) {
+            __builtin_trap();  /* → illegal-instruction trap, mcause=2 */
+        }
+    }
 }
 
 static inline void of_gpu_finish(void) {
@@ -307,15 +377,10 @@ static inline void of_gpu_depth_test(of_gpu_depth_func_t func) {
     _gpu_ring_write((uint32_t)func);
 }
 
-static inline void of_gpu_blend(of_gpu_blend_t mode) {
-    _gpu_cmd_header(GPU_CMD_SET_BLEND, 1);
-    _gpu_ring_write((uint32_t)mode);
-}
-
-static inline void of_gpu_alpha_ref(uint8_t ref) {
-    _gpu_cmd_header(GPU_CMD_SET_ALPHA_REF, 1);
-    _gpu_ring_write((uint32_t)ref);
-}
+/* of_gpu_blend / of_gpu_alpha_ref / of_gpu_shade_mode helpers removed
+ * along with their underlying SET_BLEND / SET_ALPHA_REF / SET_SHADE
+ * commands — the datapath never implemented the corresponding combine,
+ * alpha-test, or Gouraud gradient logic. */
 
 static inline void of_gpu_bind_texture(const of_gpu_texture_t *tex) {
     _gpu_cmd_header(GPU_CMD_SET_TEXTURE, 4);
@@ -323,11 +388,6 @@ static inline void of_gpu_bind_texture(const of_gpu_texture_t *tex) {
     _gpu_ring_write(((uint32_t)tex->width << 16) | tex->height);
     _gpu_ring_write(((uint32_t)tex->format << 16) | tex->wrap_s);
     _gpu_ring_write((uint32_t)tex->wrap_t);
-}
-
-static inline void of_gpu_shade_mode(int gouraud) {
-    _gpu_cmd_header(GPU_CMD_SET_SHADE, 1);
-    _gpu_ring_write(gouraud ? 1 : 0);
 }
 
 /* ---- Draw commands ---- */

@@ -261,10 +261,8 @@ static int playing = 1;
 static int pattern_break = 0;     /* set by effect 0xD/0xB to prevent double-break */
 static int pattern_delay = 0;     /* EEx: extra row repeats remaining */
 
-/* Pre-allocate one mixer voice per MOD channel — just like the Amiga
- * Paula chip, which had 4 fixed DMA channels.  Voices are never freed
- * or reallocated, so there is zero risk of voice stealing. */
-/* Trigger (or retrigger) the current sample on a channel */
+/* channels[ch].voice is hard-pinned to `ch` (Paula-style); we always
+ * retrigger that slot, never alloc, so channels can't steal each other. */
 static void trigger_note(channel_t *c, uint16_t period, int sample_offset) {
     c->period = period;
     c->rate_fp16 = period_to_rate_fp16(period);
@@ -277,20 +275,21 @@ static void trigger_note(channel_t *c, uint16_t period, int sample_offset) {
         int offset_bytes = sample_offset * 256;  /* 9xx: offset in 256-byte units, ×2 for 16-bit */
         if (offset_bytes >= (int)s->length) offset_bytes = 0;
 
-        if (c->voice >= 0)
-            of_mixer_stop(c->voice);
-        c->voice = of_mixer_play((const uint8_t *)mod->sample_data[si] + offset_bytes * 2,
-                                 s->length - offset_bytes,
-                                 AMIGA_CLOCK / (period * 2), 0, vol);
+        const uint8_t *pcm = (const uint8_t *)mod->sample_data[si] + offset_bytes * 2;
+        uint32_t scnt = s->length - offset_bytes;
+        uint32_t srate = AMIGA_CLOCK / (period * 2);
 
-        if (c->voice >= 0) {
-            if (s->loop_length > 2) {
-                int ls = s->loop_start - offset_bytes;
-                if (ls < 0) ls = 0;
-                of_mixer_set_loop(c->voice, ls, ls + (int)s->loop_length);
-            }
-            of_mixer_set_filter(c->voice, MOD_LPF_CUTOFF, MOD_LPF_Q, 1);
+        of_mixer_retrigger(c->voice, pcm, scnt, srate, vol);
+
+        if (s->loop_length > 2) {
+            int ls = s->loop_start - offset_bytes;
+            if (ls < 0) ls = 0;
+            of_mixer_set_loop(c->voice, ls, ls + (int)s->loop_length);
+        } else {
+            /* Slot may have looped on the previous sample — clear the bit. */
+            of_mixer_set_loop(c->voice, -1, 0);
         }
+        of_mixer_set_filter(c->voice, MOD_LPF_CUTOFF, MOD_LPF_Q, 1);
     }
 }
 
@@ -579,8 +578,22 @@ static void update_hardware(void) {
 
 static volatile int tick_pending = 0;
 
+/* The kernel pins of_timer_set_callback at a 1 kHz HW tick regardless
+ * of the requested hz, so divide down here to the MOD tick rate. */
+static volatile uint32_t tick_accum_ms = 0;
+static volatile uint32_t tick_period_ms = 20;  /* BPM 125 → 50 Hz → 20 ms */
+
 static void mod_timer_tick(void) {
-    tick_pending = 1;
+    if (++tick_accum_ms >= tick_period_ms) {
+        tick_accum_ms = 0;
+        tick_pending = 1;
+    }
+}
+
+static inline void set_mod_rate_from_bpm(int bpm_val) {
+    uint32_t ms = (bpm_val > 0) ? (uint32_t)(2500 / bpm_val) : 20u;
+    if (ms == 0) ms = 1;
+    tick_period_ms = ms;
 }
 
 static void process_tick(void) {
@@ -669,10 +682,11 @@ static void run_effect_test(int idx) {
     if (!mod || !mod->sample_data[0]) return;
     const effect_test_t *t = &effect_tests[idx];
 
-    /* Reset channel 0 */
+    /* Reset channel 0 but keep its pinned voice slot so retrigger has
+     * a valid target. */
     channel_t *c = &channels[0];
     memset(c, 0, sizeof(*c));
-    c->voice = -1;
+    c->voice = 0;
     c->pan = 128;
     c->sample_idx = 1;
 
@@ -765,8 +779,8 @@ static void run_effect_test(int idx) {
         }
     }
 
-    if (c->voice >= 0) of_mixer_stop(c->voice);
-    c->voice = -1;
+    of_mixer_stop(c->voice);
+    /* The SELECT-toggle handler will restore channel state on return. */
 }
 
 /* ======================================================================
@@ -819,17 +833,21 @@ int main(void) {
     cur_song = 0;
     mod = &songs[cur_song];
 
-    /* Initialize channels */
+    /* Initialize channels — pin each MOD channel to a fixed mixer
+     * voice slot (0..3) for the lifetime of the app.  Voices are
+     * activated in-place via of_mixer_retrigger, never reallocated. */
     for (int i = 0; i < MOD_NUM_CHANNELS; i++) {
-        channels[i].voice = -1;
+        channels[i].voice = i;
         channels[i].pan = default_pan[i];
         channels[i].volume = 0;
     }
 
-    /* Start tick timer: MOD tick rate = BPM * 2 / 5 */
-    int tick_hz = (bpm * 2) / 5;
-    printf("Tick rate: %d Hz (BPM=%d, speed=%d)\n", tick_hz, bpm, ticks_per_row);
-    of_timer_set_callback(mod_timer_tick, tick_hz);
+    /* MOD tick rate = BPM * 2 / 5.  HW timer is pinned at 1 kHz;
+     * mod_timer_tick divides down to tick_period_ms. */
+    set_mod_rate_from_bpm(bpm);
+    printf("Tick rate: %d Hz (BPM=%d, speed=%d)\n",
+           (bpm * 2) / 5, bpm, ticks_per_row);
+    of_timer_set_callback(mod_timer_tick, 1000);
 
     printf("\nA=next song B=next pattern SELECT=effects\n\n");
 
@@ -868,70 +886,59 @@ int main(void) {
         printf("HW test done\n");
     }
 
-    int mode = 0;  /* 0=play, 1=effect diag */
+    int mode = 0;  /* 0 = play, 1 = effect diag */
     int diag_idx = 0;
 
-    /* Display loop */
-    int display_counter = 0;
+    /* Main loop.  Sleep with wfi between timer ISRs so MIE stays on the
+     * whole time — usleep would ECALL into a kernel busy-wait with MIE
+     * cleared and silently drop most of the 1 kHz timer fires. */
+    int display_throttle = 0;
     for (;;) {
-        /* Process pending tick from timer ISR (play mode only) */
         if (mode == 0 && tick_pending) {
             tick_pending = 0;
             process_tick();
-
-            /* Update timer rate if BPM changed */
-            int new_hz = (bpm * 2) / 5;
-            if (new_hz != tick_hz) {
-                tick_hz = new_hz;
-                of_timer_set_callback(mod_timer_tick, tick_hz);
-            }
+            set_mod_rate_from_bpm(bpm);  /* Fxx may have changed bpm */
         }
 
-        /* Poll input and update display at ~30 Hz (not every tick) */
-        display_counter++;
-        if (display_counter >= 2) {
-            display_counter = 0;
+        /* Poll input + status print at ~10 Hz.  Each printf is a heavy
+         * ECALL (synchronous UART/FB writes run with MIE off), so keep
+         * them infrequent to avoid losing timer ISRs. */
+        display_throttle++;
+        if (display_throttle >= 100) {
+            display_throttle = 0;
 
             of_input_poll();
 
-            /* SELECT toggles between play and effect diagnostic mode */
             if (of_btn_pressed(OF_BTN_SELECT)) {
                 of_mixer_stop_all();
-                for (int i = 0; i < MOD_NUM_CHANNELS; i++)
-                    channels[i].voice = -1;
+                for (int i = 0; i < MOD_NUM_CHANNELS; i++) {
+                    channels[i].voice = i;
+                    channels[i].pan = default_pan[i];
+                    channels[i].volume = 0;
+                }
                 mode = !mode;
                 if (mode == 0) {
-                    current_order = 0;
-                    current_row = 0;
-                    current_tick = 0;
+                    current_order = current_row = current_tick = 0;
                     ticks_per_row = 6;
                     bpm = 125;
-                    tick_hz = (bpm * 2) / 5;
-                    of_timer_set_callback(mod_timer_tick, tick_hz);
+                    set_mod_rate_from_bpm(bpm);
                 }
                 printf("\r\033[K %s\n", mode ? "EFFECT DIAGNOSTICS" : "PLAY MODE");
             }
 
             if (mode == 0) {
-                /* Play mode controls */
                 if (of_btn_pressed(OF_BTN_A) && num_songs > 1) {
                     of_mixer_stop_all();
-                    for (int i = 0; i < MOD_NUM_CHANNELS; i++)
-                        channels[i].voice = -1;
                     cur_song = (cur_song + 1) % num_songs;
                     mod = &songs[cur_song];
-                    current_order = 0;
-                    current_row = 0;
-                    current_tick = 0;
+                    current_order = current_row = current_tick = 0;
                     ticks_per_row = 6;
                     bpm = 125;
-                    tick_hz = (bpm * 2) / 5;
-                    of_timer_set_callback(mod_timer_tick, tick_hz);
+                    set_mod_rate_from_bpm(bpm);
                     printf("\r\033[K>>> Song %d: %s\n", cur_song + 1, mod->title);
                 }
                 if (of_btn_pressed(OF_BTN_B)) {
-                    current_row = 0;
-                    current_tick = 0;
+                    current_row = current_tick = 0;
                     current_order++;
                     if (current_order >= mod->song_length)
                         current_order = 0;
@@ -940,7 +947,6 @@ int main(void) {
                        cur_song + 1, current_order, mod->order[current_order],
                        current_row, ticks_per_row, bpm);
             } else {
-                /* Effect diagnostic controls */
                 int changed = -1;
                 if (of_btn_pressed(OF_BTN_RIGHT))
                     changed = (diag_idx + 1) % (int)NUM_EFFECT_TESTS;
@@ -961,7 +967,6 @@ int main(void) {
             }
         }
 
-        /* Sleep until next tick (~20ms at 50Hz default) */
-        usleep(5000);
+        __asm__ volatile("wfi");
     }
 }
