@@ -47,11 +47,14 @@ extern "C" {
  * ================================================================ */
 
 typedef enum {
-    OF_GPU_DEPTH_NONE   = 0,
-    OF_GPU_DEPTH_ALWAYS = 1,
-    OF_GPU_DEPTH_LESS   = 2,
-    OF_GPU_DEPTH_LEQUAL = 3,
-    OF_GPU_DEPTH_EQUAL  = 4,
+    OF_GPU_DEPTH_NONE     = 0,
+    OF_GPU_DEPTH_ALWAYS   = 1,
+    OF_GPU_DEPTH_LESS     = 2,
+    OF_GPU_DEPTH_LEQUAL   = 3,
+    OF_GPU_DEPTH_EQUAL    = 4,
+    OF_GPU_DEPTH_GEQUAL   = 5,
+    OF_GPU_DEPTH_GREATER  = 6,
+    OF_GPU_DEPTH_NOTEQUAL = 7,
 } of_gpu_depth_func_t;
 
 typedef enum {
