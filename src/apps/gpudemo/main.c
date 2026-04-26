@@ -6,11 +6,14 @@
  *            camera (right-hand wall follower). Wall columns use
  *            OF_GPU_SPAN_COLUMN, floor and ceiling use horizontal
  *            spans, both colormap-lit.
- *   Mode 1 — Rotating 3D cube via the hardware triangle rasteriser
- *   Mode 2 — Perspective-correct textured triangle (software rasterised,
+ *   Mode 1 — Perspective-correct textured triangle (software rasterised,
  *            using SPAN_PERSP horizontal scanlines for the inner loop —
  *            the GPU does the 1/z reciprocal + multiply per 16-pixel
- *            sub-segment in hardware)
+ *            sub-segment in hardware).
+ *   Mode 2 — Rotating 3D cube via the hardware triangle rasteriser
+ *            (one DRAW_TRIANGLES command per face).
+ *   Mode 3 — Pinwheel of 32 triangles drawn in a single batched
+ *            DRAW_TRIANGLES command (of_gpu_draw_triangles_batch).
  *
  * Controls:
  *   A button — cycle through demo modes
@@ -556,6 +559,7 @@ static uint8_t *face_tex;
 static void draw_triangle_demo(int frame) {
     uint8_t *fb = of_video_surface();
 
+    unsigned int _t0 = of_time_us();
     prepare_fb(fb, 0x08);
 
     /* Initialise per-face texels and flush to SDRAM before GPU draws */
@@ -615,7 +619,99 @@ static void draw_triangle_demo(int frame) {
         of_gpu_draw_triangles(tri, 3);
     }
 
+    unsigned int _t1 = of_time_us();
     of_gpu_finish();
+    unsigned int _t2 = of_time_us();
+    _stat_cpu_us += _t1 - _t0;
+    _stat_gpu_us += _t2 - _t1;
+}
+
+/* ================================================================
+ * Multi-Triangle Demo: rotating fan of textured triangles drawn in a
+ * single batched DRAW_TRIANGLES command via of_gpu_draw_triangles_batch().
+ *
+ * The fan has FAN_SLICES wedges sharing the same bound texture, so the
+ * whole frame's geometry rides on one cmd-decode pass instead of N.
+ * Per-vertex `r` (flat light) varies sinusoidally so adjacent slices
+ * pulse at different phases — easy visual confirmation that each
+ * triangle in the batch is rendered with its own attributes.
+ * ================================================================ */
+
+#define FAN_SLICES 32
+
+static void draw_multitri_demo(int frame) {
+    uint8_t *fb = of_video_surface();
+
+    unsigned int _t0 = of_time_us();
+    prepare_fb(fb, 0x10);
+
+    of_gpu_texture_t tex = {
+        .addr = (uint32_t)(uintptr_t)wall_tex,
+        .width = 64, .height = 64,
+        .format = OF_GPU_TEXFMT_I8,
+        .wrap_s = OF_GPU_WRAP_REPEAT,
+        .wrap_t = OF_GPU_WRAP_REPEAT,
+    };
+    of_gpu_bind_texture(&tex);
+
+    static of_gpu_vertex_t verts[FAN_SLICES * 3];
+
+    int cx = SCREEN_W / 2;
+    int cy = SCREEN_H / 2;
+    int radius = 90;
+    int rot = (frame * 2) & 255;
+
+    /* Center vertex shared by every slice */
+    of_gpu_vertex_t center = {
+        .x = (int16_t)(cx * 16), .y = (int16_t)(cy * 16),
+        .s = (int32_t)32 << 16,  .t = (int32_t)32 << 16,
+        .w = 0x10000,
+    };
+
+    for (int i = 0; i < FAN_SLICES; i++) {
+        int a0 = ((i       * 256) / FAN_SLICES + rot) & 255;
+        int a1 = (((i + 1) * 256) / FAN_SLICES + rot) & 255;
+
+        int x0 = cx + (cos_lut[a0] * radius) / 256;
+        int y0 = cy + (sin_lut[a0] * radius) / 256;
+        int x1 = cx + (cos_lut[a1] * radius) / 256;
+        int y1 = cy + (sin_lut[a1] * radius) / 256;
+
+        /* Texture sweeps a circle: rim points sit on a 28-px radius
+         * around (32,32) so the rotating wheel kaleidoscopes through
+         * the brick texture. */
+        int32_t s0 = (int32_t)(32 + (cos_lut[a0] * 28) / 256) << 16;
+        int32_t t0 = (int32_t)(32 + (sin_lut[a0] * 28) / 256) << 16;
+        int32_t s1 = (int32_t)(32 + (cos_lut[a1] * 28) / 256) << 16;
+        int32_t t1 = (int32_t)(32 + (sin_lut[a1] * 28) / 256) << 16;
+
+        /* Flat light per triangle, phased by slice index + frame. */
+        int s = sin_lut[(i * 8 + frame * 4) & 255];
+        uint8_t light = (uint8_t)(24 - (s >> 4));   /* 24 ± 16 */
+
+        of_gpu_vertex_t v0 = center;            v0.r = light;
+        of_gpu_vertex_t v1 = {
+            .x = (int16_t)(x0 * 16), .y = (int16_t)(y0 * 16),
+            .s = s0, .t = t0, .w = 0x10000, .r = light,
+        };
+        of_gpu_vertex_t v2 = {
+            .x = (int16_t)(x1 * 16), .y = (int16_t)(y1 * 16),
+            .s = s1, .t = t1, .w = 0x10000, .r = light,
+        };
+        verts[i * 3 + 0] = v0;
+        verts[i * 3 + 1] = v1;
+        verts[i * 3 + 2] = v2;
+    }
+
+    /* All FAN_SLICES triangles in ONE command — the whole point of
+     * the batched form. */
+    of_gpu_draw_triangles_batch(verts, FAN_SLICES * 3);
+
+    unsigned int _t1 = of_time_us();
+    of_gpu_finish();
+    unsigned int _t2 = of_time_us();
+    _stat_cpu_us += _t1 - _t0;
+    _stat_gpu_us += _t2 - _t1;
 }
 
 /* ================================================================
@@ -827,7 +923,7 @@ int main(void) {
     of_gpu_init();
     printf("[gpudemo] gpu_init ok\n");
 
-    of_gpu_colormap_upload(colormap, sizeof(colormap));
+    of_gpu_palookup_upload(0, colormap, sizeof(colormap));
     printf("[gpudemo] colormap uploaded\n");
 
     {
@@ -837,13 +933,11 @@ int main(void) {
 
     printf("[gpudemo] entering main loop — A = cycle mode\n");
 
-    /* Mode 0 = Auto-walking raycaster maze (LITE supported)
-     * Mode 1 = Perspective-correct triangle (SPAN_PERSP, LITE supported)
-     *
-     * The Pocket ships GPU_VARIANT_LITE, which has the pipelined
-     * fragment processor and the perspective span path but NOT the
-     * triangle rasteriser (GPU_FEAT_TRIANGLE is FULL-only). So the
-     * rotating cube in draw_triangle_demo() is skipped on this target. */
+    /* Mode 0 — Auto-walking raycaster maze (textured spans + colormap)
+     * Mode 1 — Perspective-correct textured triangle (SPAN_PERSP)
+     * Mode 2 — Rotating 3D cube (per-triangle DRAW_TRIANGLES)
+     * Mode 3 — Pinwheel of 32 triangles in one batched DRAW_TRIANGLES
+     *          command (of_gpu_draw_triangles_batch) */
     int mode = 0;
     int frame = 0;
     int auto_switch_at = 600;  /* swap modes every ~10s */
@@ -858,13 +952,15 @@ int main(void) {
     while (1) {
         of_input_poll();
         if (of_btn_pressed(OF_BTN_A)) {
-            mode = (mode + 1) % 2;
+            mode = (mode + 1) % 4;
             printf("[gpudemo] mode -> %d\n", mode);
         }
 
         switch (mode) {
-            case 0: draw_maze_demo(frame);  break;
-            case 1: draw_persp_demo(frame); break;
+            case 0: draw_maze_demo(frame);     break;
+            case 1: draw_persp_demo(frame);    break;
+            case 2: draw_triangle_demo(frame); break;
+            case 3: draw_multitri_demo(frame); break;
         }
         of_video_flip();
         fps_frames++;
