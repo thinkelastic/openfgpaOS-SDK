@@ -3,9 +3,9 @@
  *
  * Showcases every GPU feature:
  *   Mode 0 — Wolfenstein-style raycaster maze with an auto-walking
- *            camera (right-hand wall follower). Wall columns use
- *            OF_GPU_SPAN_COLUMN, floor and ceiling use horizontal
- *            spans, both colormap-lit.
+ *            camera (right-hand wall follower). Wall columns and
+ *            floor/ceiling use colormap-lit horizontal spans (column
+ *            walking is selected by fb_stride, not by a flag bit).
  *   Mode 1 — Perspective-correct textured triangle (software rasterised,
  *            using SPAN_PERSP horizontal scanlines for the inner loop —
  *            the GPU does the 1/z reciprocal + multiply per 16-pixel
@@ -167,7 +167,7 @@ static void set_palette(void) {
  * ================================================================
  * Map is a 16x16 grid ('#' = wall, '.' = empty). For each screen column
  * we cast a ray through the grid with DDA, find the nearest wall hit,
- * and draw a textured vertical OF_GPU_SPAN_COLUMN for the visible slice.
+ * and draw a textured vertical column-walked span (fb_stride=SCREEN_W).
  * Floor and ceiling are filled with horizontal spans using the standard
  * "row distance" floor cast (linear in screen y). Both paths feed the
  * same colormap-lit fragment processor.
@@ -522,7 +522,7 @@ static void draw_maze_demo(int frame) {
             .tstep     = tstep,
             .count     = span_count,
             .light     = light,
-            .flags     = OF_GPU_SPAN_COLORMAP | OF_GPU_SPAN_COLUMN,
+            .flags     = OF_GPU_SPAN_COLORMAP,
             .fb_stride = SCREEN_W,
             .tex_width = 64,
         };
@@ -606,8 +606,6 @@ static void draw_triangle_demo(int frame) {
         of_gpu_texture_t solid_tex = {
             .addr = (uint32_t)(uintptr_t)&face_tex[f / 2],
             .width = 1, .height = 1,
-            .format = OF_GPU_TEXFMT_I8,
-            .wrap_s = OF_GPU_WRAP_REPEAT, .wrap_t = OF_GPU_WRAP_REPEAT,
         };
         of_gpu_bind_texture(&solid_tex);
 
@@ -648,9 +646,6 @@ static void draw_multitri_demo(int frame) {
     of_gpu_texture_t tex = {
         .addr = (uint32_t)(uintptr_t)wall_tex,
         .width = 64, .height = 64,
-        .format = OF_GPU_TEXFMT_I8,
-        .wrap_s = OF_GPU_WRAP_REPEAT,
-        .wrap_t = OF_GPU_WRAP_REPEAT,
     };
     of_gpu_bind_texture(&tex);
 
