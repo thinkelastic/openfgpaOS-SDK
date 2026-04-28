@@ -276,18 +276,49 @@ static inline void of_gpu_init(void) {
     GPU_RING_WRPTR = 0;
     GPU_CTRL = 1;               /* enable */
 
-    /* Pin the doorbell-DMA scratch buffer at a known SDRAM offset.
+    /* Pin the doorbell-DMA scratch buffer at a known SDRAM offset, via
+     * the UNCACHED SDRAM alias (caps->sdram_uncached_base + offset).
+     *
+     * Why uncached: the prior cached-pointer + of_cache_flush_range
+     * scheme produced an intermittent freeze (~5–10 s into Duke3D
+     * gameplay) with mcause=2 / unmapped mepc — a classic GPU-writes-
+     * pixels-into-CPU-code corruption signature.  Bisection isolated
+     * it to the doorbell-DMA path: per-span MMIO fallback ran for
+     * hours, DMA path froze within seconds, and shrinking
+     * MAX_SPANS=32 (much smaller payloads, much rarer ring wrap)
+     * still froze.  Root cause: cbo.flush left dirty L1 lines on
+     * occasion (or skipped the trailing partial-line of the payload),
+     * the GPU's m_rd_* AXI master then pulled stale SDRAM bytes for
+     * a span, sp_fb_addr decoded as garbage, and the GPU's m_wr_*
+     * wrote pixels over CPU stack/.text — surfacing several frames
+     * later as the trap.  See docs/bug-gpu-batch-dma-freeze.md.
+     *
+     * Routing CPU encoder writes through the uncached alias bypasses
+     * D-cache entirely: writes hit DRAM directly, no flush dependency,
+     * and the GPU's reads are guaranteed to see committed data
+     * unconditionally.  Same trick of_gpu_palookup_upload uses for
+     * the same class of bug; that one was fixed identically.
+     *
+     * Cost: every uint32_t store in _gpu_encode_span goes through the
+     * SDRAM controller (~10-15 cycles each vs ~1 cycle cached).  For
+     * a max batch (1920 words = 7680 B) that's ~25 µs of CPU encoder
+     * time vs ~2 µs cached.  The doorbell-DMA path's mandatory
+     * `wait DMA_BUSY` at the end of each batch already dominated end-
+     * to-end timing (~150 µs/batch fixed overhead at this workload),
+     * so the uncached encoder cost is in the noise — verified at
+     * ~34 fps either way in the bisection runs.
+     *
      * gpu_core's m_rd_* AXI master goes only to the SDRAM arbiter
      * (core_top.v: sdram_arb m0) so the scratch MUST live in SDRAM —
      * a malloc()'d pointer that early-init resolved to CRAM0 (where
      * apps' .text/.data live) is unreachable and the DMA would pull
-     * garbage.  Same scheme palookup uses (caps->sdram_base +
-     * OF_GPU_PALOOKUP_AXI_OFFSET); we sit one window above. */
+     * garbage.  We sit one window above palookup, both in the SDRAM
+     * uncached alias. */
     {
         const struct of_capabilities *caps = of_get_caps();
-        if (caps && caps->sdram_base != 0)
+        if (caps && caps->sdram_base != 0 && caps->sdram_uncached_base != 0)
             _gpu_batch_buf = (uint32_t *)(uintptr_t)
-                (caps->sdram_base + OF_GPU_BATCH_BUF_AXI_OFFSET);
+                (caps->sdram_uncached_base + OF_GPU_BATCH_BUF_AXI_OFFSET);
         else
             _gpu_batch_buf = NULL;   /* helper falls back to per-MMIO */
     }
@@ -570,37 +601,13 @@ static inline void of_gpu_draw_spans_batch(const of_gpu_span_t *spans,
                                                   : count;
         uint32_t payload_words = (uint32_t)(15 * n);
 
-        /* TEMP TRACE: log every batch (first 12 only, so we don't
-         * flood UART) — index, ring state before kick, free space.
-         * If the batches show ring overflow or rdptr stalls, the
-         * fence-wait hang's root cause will be obvious. */
-        static int _of_gpu_batch_idx = 0;
-        if (_of_gpu_batch_idx < 30) {
-            extern int printf(const char *, ...);
-            uint32_t rdptr_now = GPU_RING_RDPTR;
-            uint32_t free_bytes = (rdptr_now - _gpu_wrptr - 4) & _gpu_ring_mask;
-            printf("[batch%d] n=%d payload=%u rdptr=0x%04x sdk_wrptr=0x%04x ring_wrptr=0x%04x free=%u dma=%u\n",
-                   _of_gpu_batch_idx, n, (unsigned)payload_words,
-                   (unsigned)rdptr_now, (unsigned)_gpu_wrptr,
-                   (unsigned)GPU_RING_WRPTR, (unsigned)free_bytes,
-                   (unsigned)((GPU_STATUS >> 2) & 1));
-            _of_gpu_batch_idx++;
-        }
-
-        /* Build the batch in cached SDRAM at scalar-store speed.  The
-         * `wait for DMA at end of helper` policy below guarantees the
-         * scratch buffer is free for reuse before we get here. */
+        /* Build the batch directly in the uncached SDRAM scratch
+         * window (see of_gpu_init).  Each store hits SDRAM through
+         * the cache-bypass alias, so there is no L1 pollution and no
+         * flush dependency: the GPU's m_rd_* AXI master is guaranteed
+         * to see committed data unconditionally on its next pull. */
         for (int i = 0; i < n; i++)
             _gpu_encode_span(&_gpu_batch_buf[i * 15], &spans[i]);
-
-        /* Force the populated range out of L1 so the GPU's m_rd_*
-         * AXI master sees committed bytes.  cbo.flush (writeback +
-         * invalidate) is required on this VexiiRiscv config — cbo.clean
-         * alone has been observed to leave dirty lines in L1, and the
-         * GPU reads DRAM directly (not through the CPU's cache).
-         * Same rationale as bank_preload's flush of the SF2 sample
-         * blob before handing it to the audio mixer. */
-        of_cache_flush_range(_gpu_batch_buf, payload_words * 4);
 
         /* Reserve enough ring space for header + DMA-streamed payload.
          * Write the header word via MMIO; this advances ring_wr_addr in

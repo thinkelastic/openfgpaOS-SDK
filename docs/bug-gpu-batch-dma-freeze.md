@@ -1,20 +1,28 @@
-# Open: GPU hangs after a few seconds of CMD_DRAW_SPANS_BATCH traffic
+# Closed: GPU hangs after a few seconds of CMD_DRAW_SPANS_BATCH traffic
 
 ## Status
 
-**Open.** Reproducible on Pocket hardware with PocketDukeNukem-SDK
-duke3d core (post-commit 3531b2a per-span colormap_id wire format).
-Hangs within a few seconds of entering an in-game level; the symptom
-predates the colormap_id change but landed faster after it (bigger
-batches → more DMA traffic per frame).
+**Fixed.**  Root cause: the doorbell-DMA scratch buffer
+(`_gpu_batch_buf`) lived in *cached* SDRAM, and `of_cache_flush_range`
+intermittently failed to fully drain dirty L1 lines before the
+`GPU_DMA_KICK`.  The GPU's `m_rd_*` AXI master then pulled stale
+SDRAM bytes for one or more span fields, `sp_fb_addr` decoded as
+garbage, and the GPU's `m_wr_*` wrote pixels over CPU stack/.text in
+SDRAM — surfacing several frames later as `mcause=2` with PC in
+unmapped SDRAM.
 
-A workaround is in place in PocketDukeNukem-SDK's vendored
-`src/sdk/include/of_gpu.h`: `of_gpu_draw_spans_batch` forces the
-per-span MMIO fallback via a `1 ||` guard at the
-`if (_gpu_batch_buf == NULL)` site (search `TEMP DIAG`). Frame rate
-is essentially unchanged (~34 fps either way) because the DMA path's
-`while (GPU_STATUS & GPU_STATUS_DMA_BUSY)` was eating most of the
-theoretical batching win at this workload.
+**Fix:** route `_gpu_batch_buf` through the uncached SDRAM alias
+(`caps->sdram_uncached_base + OF_GPU_BATCH_BUF_AXI_OFFSET`) and drop
+the `of_cache_flush_range` call.  Every CPU encoder store now hits
+SDRAM directly via the cache-bypass alias, so the GPU's reads see
+committed data unconditionally — no flush dependency.  Same fix
+`of_gpu_palookup_upload` already uses for the same class of bug.
+
+The earlier port-A skid fix in `gpu_core.v` (commit `c2d6b47`) is
+correct and stays — it covers a *different* race (CPU MMIO ring
+write colliding with a DMA R-beat on port-A) which is real but
+rarer.  Both fixes are needed; this doc covers the
+`mcause=2 in seconds` failure mode the skid fix did *not* address.
 
 ## Symptom
 
@@ -91,21 +99,47 @@ commands via per-word MMIO, or builds the batch in SDRAM and uses
   `0x140000`, immediately above the 256 KB palookup window —
   if the DMA wraps wrong, it could trash palookup bytes.
 
-## Reproducing
+## Diagnostic helpers already in tree
 
-1. Clone PocketDukeNukem-SDK at HEAD.
-2. In `src/sdk/include/of_gpu.h`, replace `1 || _gpu_batch_buf == NULL`
-   with `_gpu_batch_buf == NULL` (re-enable DMA path).
+- `of_gpu_wait` has a 50M-iteration watchdog that traps via
+  `__builtin_trap` (mcause=2 / mtval=0xc0001073 from the `unimp`).
+  Distinguishes "GPU is stuck" from "CPU walked off a cliff".
+
+## Why the prior fix attempt missed it
+
+The first fix landed in `openfpgaOS` commit `c2d6b47` (gpu_core.v
+1-deep skid for the port-A CPU/DMA collision).  That fix was *correct
+but addressed a different race* — the SDK and RTL had two overlapping
+bugs and we patched the harder-to-see one first:
+
+| Bug | Trigger | Symptom | Fix |
+|---|---|---|---|
+| **Port-A mux race** (RTL) | CPU MMIO write to `GPU_RING_DATA` collides with a DMA R-beat in the same cycle | Dropped CPU header → stale ring_bram cell → bad `sp_fb_addr` decode | gpu_core.v 1-deep skid (`c2d6b47`) |
+| **Cache flush race** (SDK) | `of_cache_flush_range` leaves a dirty L1 line in the batch payload | DMA pulls stale SDRAM → bad `sp_fb_addr` decode | `_gpu_batch_buf` via uncached alias (this fix) |
+
+Both produce the same downstream signature: a span with corrupt
+`fb_addr` causes the GPU's `m_wr_*` to write pixels into CPU code or
+stack, and the trap surfaces several frames later as `mcause=2` with
+unmapped `mepc`.  After landing the port-A skid, the freeze rate
+dropped — fewer collisions made it through — but didn't go to zero
+because the cache-flush race fires on a different timeline.  Both
+fixes are needed.
+
+The clue we under-weighted: bisection showed the freeze persisted
+even with `OF_GPU_BATCH_MAX_SPANS=32` (4× smaller batches, ~4× rarer
+ring-wrap, but also ~4× rarer port-A collisions).  Cache flush bugs
+fire per-batch regardless of batch size, which matched the data
+better than collision rate did.  In hindsight that was the signal to
+audit the cache flush path first, not the RTL.
+
+## Reproducing the original bug
+
+1. Clone PocketDukeNukem-SDK at HEAD before this fix.
+2. In `src/sdk/include/of_gpu.h`, drop the `1 ||` guard at
+   `if (_gpu_batch_buf == NULL)` to re-enable the DMA path.
 3. `make build CORE=duke3d`, deploy to Pocket.
 4. Start a new game on the first level (E1L1).
 5. Hangs within ~5–10 seconds of moving / shooting.
 
-## Diagnostic helpers already in tree
-
-- `of_gpu_draw_spans_batch` has a TEMP TRACE that prints the first 30
-  batches' `rdptr / sdk_wrptr / ring_wrptr / free / dma_busy` at kick
-  time. Useful for spotting a wrptr that drifts apart from rdptr in
-  ways that look like a missed DMA-publish.
-- `of_gpu_wait` has a 50M-iteration watchdog that traps via
-  `__builtin_trap` (mcause=2 / mtval=0xc0001073 from the `unimp`).
-  Distinguishes "GPU is stuck" from "CPU walked off a cliff".
+After the fix: drop the `1 ||` guard, redeploy, the DMA path runs
+indefinitely.
