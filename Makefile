@@ -108,6 +108,7 @@ help:
 	@printf "    $(C_CMD)make $(C_VERB)copy$(C_RESET) $(C_ARG)CORE=<core>$(C_RESET)         Copy the <core> custom core only\n"
 	@printf "    $(C_CMD)make $(C_VERB)package$(C_RESET)                  Package SDK demo core + every custom core\n"
 	@printf "    $(C_CMD)make $(C_VERB)tools$(C_RESET)                    Build PHDP host tools\n"
+	@printf "    $(C_CMD)make $(C_VERB)push$(C_RESET) $(C_ARG)DEST=\"path/to/sdk\"$(C_RESET)   Mirror src + os.bin into another SDK (keeps its core)\n"
 	@printf "    $(C_CMD)make $(C_VERB)clean$(C_RESET)                    Remove all build artifacts\n"
 
 # ── Setup ────────────────────────────────────────────────────────────
@@ -227,6 +228,34 @@ else
 	./scripts/package.sh
 endif
 
+# ── Push SDK to another SDK checkout ────────────────────────────────
+# Mirrors source + os.bin + bank.ofsf into another SDK at $(DEST).
+# Leaves the FPGA core (bitstream.rbf_r, ap_core.sof, loader.bin)
+# untouched so the destination keeps its own core build.  Existing
+# files in DEST that aren't in this tree are left alone — no --delete.
+push:
+	@test -n "$(DEST)" || { \
+		printf "Usage: make push DEST=\"path/to/other/sdk\"\n"; \
+		exit 1; \
+	}
+	@test -d "$(DEST)/src/sdk" || { \
+		printf "Not an openfpgaOS SDK at $(DEST)\n"; \
+		exit 1; \
+	}
+	@printf "$(C_HEAD)[push]$(C_RESET) → $(DEST) (FPGA core left intact)\n"
+	@rsync -a --exclude='.obj/' --exclude='build/' --exclude='dist/' \
+	          --exclude='releases/' --exclude='._*' \
+	          src/ "$(DEST)/src/"
+	@rsync -a --exclude='._*' scripts/ "$(DEST)/scripts/"
+	@rsync -a --exclude='._*' docs/    "$(DEST)/docs/"
+	@cp -f Makefile  "$(DEST)/Makefile"
+	@cp -f README.md "$(DEST)/README.md"
+	@[ -f GETTING_STARTED.md ] && cp -f GETTING_STARTED.md "$(DEST)/GETTING_STARTED.md" || true
+	@mkdir -p "$(DEST)/runtime"
+	@cp -f runtime/os.bin    "$(DEST)/runtime/os.bin"
+	@cp -f runtime/bank.ofsf "$(DEST)/runtime/bank.ofsf"
+	@printf "  skipped: runtime/{bitstream.rbf_r, ap_core.sof, loader.bin}\n"
+
 # ── Build host tools ────────────────────────────────────────────────
 tools:
 	$(MAKE) -C src/tools/phdp
@@ -249,4 +278,4 @@ else
 	rm -rf build .obj releases
 endif
 
-.PHONY: all help setup core build debug test copy package tools clean
+.PHONY: all help setup core build debug test copy package push tools clean

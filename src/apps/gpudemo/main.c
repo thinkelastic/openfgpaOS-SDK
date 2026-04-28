@@ -63,21 +63,44 @@ static void build_sin_table(void) {
 }
 
 static void build_colormap(void) {
-    /* Generate a simple colormap: each light level dims the palette.
+    /* Hue-preserving distance-fade colormap.  Each (light, texel) cell
+     * outputs a palette entry IN THE SAME BAND as the texel — it just
+     * darkens within that band as light grows.  This keeps colours
+     * stable with distance: red walls fade to dark red, blue floor
+     * fades to dark blue, etc.  A naive linear-fade-to-16 would walk
+     * through other bands mid-distance (e.g. blue → red → gray) and
+     * read as colour-shifting fog.
      *
-     * IMPORTANT: the output index must never fall below 16 — palette
-     * entries 0..15 are reserved for the OS terminal's VGA 16-colour
-     * set (see set_palette), so a heavily-dimmed texel that lands on
-     * index 6 would render as terminal-red, not dark grey. Clamp the
-     * low end to 16 and rescale the ramp into [16, i] so distant
-     * surfaces fade smoothly into the reserved-safe greyscale band
-     * instead of flashing VGA primaries. */
+     * Bands (must match set_palette):
+     *   0x00..0x0F   pass-through (OS terminal VGA, do not touch)
+     *   0x10..0x7F   gray ramp; fades linearly to index 16
+     *   0x80..0x9F   red brick;   fades within band [0x80..0x9F]
+     *   0xA0..0xBF   warm brown;  fades within band
+     *   0xC0..0xDF   green;       fades within band
+     *   0xE0..0xFF   blue;        fades within band
+     *
+     * Per-band fade math: pos = i & 0x1F (0..31 within band), then
+     * out = band_base + pos * (63 - light) / 63.  At light=0 the
+     * output equals the input (full brightness); at light=63 the
+     * output is the band's darkest entry.  Light values >= 32 saturate
+     * one bit shy of the very-dark end so heavily-shaded surfaces
+     * still show some hue rather than collapsing to a single index. */
     for (int light = 0; light < 64; light++) {
         for (int i = 0; i < 256; i++) {
-            int base = (i < 16) ? i : 16;
-            int dimmed = base + ((i - base) * (63 - light)) / 63;
+            int dimmed;
+            if (i < 16) {
+                dimmed = i;                                     /* terminal pass-through */
+            } else if (i < 128) {
+                /* Gray ramp 16..127 fades to 16.  Same math as the
+                 * previous grayscale-only colormap. */
+                dimmed = 16 + ((i - 16) * (63 - light)) / 63;
+            } else {
+                /* Coloured bands: stay in band, fade within it. */
+                int band = i & 0xE0;        /* 0x80, 0xA0, 0xC0, 0xE0 */
+                int pos  = i & 0x1F;        /* 0..31 within the band */
+                dimmed = band + (pos * (63 - light)) / 63;
+            }
             if (dimmed > 255) dimmed = 255;
-            if (dimmed < 16 && i >= 16) dimmed = 16;
             colormap[light * 256 + i] = (uint8_t)dimmed;
         }
     }
@@ -150,14 +173,47 @@ static void build_persp_texture(void) {
 }
 
 static void set_palette(void) {
-    /* Simple grayscale + warm tint for upper half.
+    /* Multi-band coloured ramp.  Bands match build_colormap so each
+     * (texel, shade) cell maps to a darker shade of the SAME hue.
      *
-     * IMPORTANT: skip indexes 0-15 — those are the OS terminal's VGA
-     * 16-color palette (used for white text in OF_DISPLAY_OVERLAY mode).
-     * Overwriting them blanks the overlay text. */
+     *   0x10..0x7F   gray ramp (used by colormap fade-to-16 path)
+     *   0x80..0x9F   red brick: dark red → bright red
+     *   0xA0..0xBF   warm brown / mortar / wood
+     *   0xC0..0xDF   green: moss / vegetation
+     *   0xE0..0xFF   blue: sky / water / floor tile
+     *
+     * Each band's index 0 is the band's darkest entry (where heavily
+     * shaded texels land) and index 31 is its brightest.  Channels
+     * scale linearly within the band so the fade reads as a pure
+     * brightness change with no hue shift.
+     *
+     * IMPORTANT: skip 0..15 — those are the OS terminal VGA palette
+     * used by OF_DISPLAY_OVERLAY mode. */
     for (int i = 16; i < 256; i++) {
-        uint8_t r = i, g = i, b = i;
-        if (i >= 0x80) { r = i; g = (i * 7) >> 3; b = (i * 5) >> 3; }
+        uint8_t r, g, b;
+        if (i < 0x80) {                                /* 16..127: gray */
+            r = g = b = (uint8_t)i;
+        } else if (i < 0xA0) {                         /* 128..159: red brick */
+            int t = i - 0x80;                          /* 0..31 */
+            r = (uint8_t)(0x40 + (191 * t) / 31);
+            g = (uint8_t)(0x10 + ( 60 * t) / 31);
+            b = (uint8_t)(0x08 + ( 24 * t) / 31);
+        } else if (i < 0xC0) {                         /* 160..191: warm brown */
+            int t = i - 0xA0;
+            r = (uint8_t)(0x30 + (175 * t) / 31);
+            g = (uint8_t)(0x18 + (110 * t) / 31);
+            b = (uint8_t)(0x08 + ( 56 * t) / 31);
+        } else if (i < 0xE0) {                         /* 192..223: green */
+            int t = i - 0xC0;
+            r = (uint8_t)(0x10 + ( 50 * t) / 31);
+            g = (uint8_t)(0x40 + (190 * t) / 31);
+            b = (uint8_t)(0x10 + ( 50 * t) / 31);
+        } else {                                       /* 224..255: blue */
+            int t = i - 0xE0;
+            r = (uint8_t)(0x10 + ( 80 * t) / 31);
+            g = (uint8_t)(0x30 + (130 * t) / 31);
+            b = (uint8_t)(0x60 + (155 * t) / 31);
+        }
         of_video_palette(i, ((uint32_t)r << 16) | ((uint32_t)g << 8) | b);
     }
 }

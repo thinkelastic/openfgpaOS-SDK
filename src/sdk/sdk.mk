@@ -135,19 +135,7 @@ OF_CXXABI_SRC = $(SDK_DIR)/of_cxxabi.cpp
 OF_INIT_SRC = $(SDK_DIR)/of_init.c
 OF_INIT_OBJ = $(OBJ_DIR)/of_init.o
 
-# of_sdl_gpu.c provides the GPU bridge for the SDL2 shim.  It pulls in
-# of_gpu.h (which has static state, must live in exactly one TU) and
-# exposes plain extern functions the SDL.h shim header calls.  Apps that
-# don't use SDL2 still link this object; it's <100 lines and the linker
-# garbage-collects unused functions under --gc-sections.
-OF_SDL_GPU_SRC = $(SDK_DIR)/of_sdl_gpu.c
-OF_SDL_GPU_OBJ = $(OBJ_DIR)/of_sdl_gpu.o
-
 $(OF_INIT_OBJ): $(OF_INIT_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(ALL_CFLAGS) -c -o $@ $<
-
-$(OF_SDL_GPU_OBJ): $(OF_SDL_GPU_SRC)
 	@mkdir -p $(dir $@)
 	$(CC) $(ALL_CFLAGS) -c -o $@ $<
 
@@ -161,9 +149,9 @@ APP_OBJS     = $(APP_C_OBJS) $(APP_CXX_OBJS)
 # OF_INIT_OBJ is linked alongside the app objects so its constructor
 # (in .init_array, KEEP'd by app.ld) is picked up by the linker even
 # under --gc-sections.
-$(BUILD_DIR)/app.elf: $(APP_OBJS) $(OF_INIT_OBJ) $(OF_SDL_GPU_OBJ) $(APP_LD) $(CRT_OBJS)
+$(BUILD_DIR)/app.elf: $(APP_OBJS) $(OF_INIT_OBJ) $(APP_LD) $(CRT_OBJS)
 	@mkdir -p $(dir $@)
-	$(LD) $(ALL_LDFLAGS) -o $@ $(CRT_OBJS) $(APP_OBJS) $(OF_INIT_OBJ) $(OF_SDL_GPU_OBJ) $(LIBS)
+	$(LD) $(ALL_LDFLAGS) -o $@ $(CRT_OBJS) $(APP_OBJS) $(OF_INIT_OBJ) $(LIBS)
 
 $(OBJ_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
