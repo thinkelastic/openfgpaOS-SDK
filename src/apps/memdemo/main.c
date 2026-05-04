@@ -1,8 +1,23 @@
 /*
- * openfpgaOS Memory Performance Demo
+ * memdemo — characterise memory bandwidth across the address spaces
  *
- * Benchmarks memset, memcpy, random access at various buffer sizes
- * to characterize throughput and cache behavior across SDRAM, PSRAM, and BRAM.
+ * Canonical example of:
+ *   - Comparing cached vs uncached SDRAM throughput by aliasing the
+ *     same physical bytes via 0x10xxxxxx (cached) and 0x40xxxxxx
+ *     (uncached) — the diff measures the L1 D-cache + writeback path
+ *   - Hitting CRAM0/PSRAM via the 0x38xxxxxx uncached alias only —
+ *     CRAM0 is i_axi-only on this CPU build, so cached stores trap
+ *     with store-access-fault (see comment near PSRAM_BASE)
+ *   - of_time_us-driven microbenchmarks with a `volatile sink` to
+ *     stop the compiler eliding the loop
+ *
+ * Output is a table of MB/s for sequential read/write, memset, memcpy,
+ * and random access at four sizes (256 B, 1 KB, 16 KB, 256 KB).  Run
+ * after kernel changes to the cache policy or SDRAM controller and
+ * compare to the previous numbers — large regressions mean a path
+ * dropped its burst capability or fell off the FIFO.
+ *
+ * Controls: any button to exit after the table prints.
  */
 
 #include "of.h"

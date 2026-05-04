@@ -1,22 +1,36 @@
 /*
- * openfpgaOS GPU Accelerator Demo
+ * gpudemo — exercise every public GPU primitive
  *
- * Showcases every GPU feature:
- *   Mode 0 — Wolfenstein-style raycaster maze with an auto-walking
- *            camera (right-hand wall follower). Wall columns and
- *            floor/ceiling use colormap-lit horizontal spans (column
- *            walking is selected by fb_stride, not by a flag bit).
- *   Mode 1 — Perspective-correct textured triangle (software rasterised,
- *            using SPAN_PERSP horizontal scanlines for the inner loop —
- *            the GPU does the 1/z reciprocal + multiply per 16-pixel
- *            sub-segment in hardware).
- *   Mode 2 — Rotating 3D cube via the hardware triangle rasteriser
- *            (one DRAW_TRIANGLES command per face).
- *   Mode 3 — Pinwheel of 32 triangles drawn in a single batched
- *            DRAW_TRIANGLES command (of_gpu_draw_triangles_batch).
+ * Canonical example of:
+ *   - of_gpu_init + the GPU_CTRL soft-reset preamble (clears any
+ *     boot-time garbage out of the ring before the first real cmd)
+ *   - of_gpu_palookup_upload + of_gpu_set_colormap_id for distance-fade
+ *     "Doom-style" colour-mapped spans, with a hue-preserving colormap
+ *     (build_colormap below) that keeps each band stable as light grows
+ *   - of_gpu_draw_span (struct-driven; column-walked spans use
+ *     fb_stride = SCREEN_W, row-walked use fb_stride = 1)
+ *   - of_gpu_draw_triangles + of_gpu_draw_triangles_batch for
+ *     hardware-rasterised triangles, including the batched form which
+ *     submits N triangles in one ring command for cmd-decode savings
+ *   - SPAN_PERSP for perspective-correct textured spans (CPU computes
+ *     edge interpolants, GPU does the 1/z reciprocal per sub-segment)
+ *   - cache discipline: textures live in malloc'd SDRAM, flushed once
+ *     at startup with of_cache_clean_range so the GPU's AXI master
+ *     reads committed bytes; the framebuffer is GPU-written so the CPU
+ *     never needs to flush it back
+ *
+ * Modes (cycle with A):
+ *   0  Wolfenstein-style raycaster maze, auto-walking camera, lit by
+ *      a baked light grid + per-frame flicker
+ *   1  Perspective-correct textured triangle, software rasterised
+ *      with SPAN_PERSP for the inner-loop math
+ *   2  Rotating 3D cube via the hardware triangle rasteriser, one
+ *      face per DRAW_TRIANGLES
+ *   3  Pinwheel of 32 textured triangles in a single batched
+ *      DRAW_TRIANGLES command
  *
  * Controls:
- *   A button — cycle through demo modes
+ *   A   cycle modes
  */
 
 #include <stdio.h>
@@ -49,6 +63,16 @@ static uint8_t *persp_tex;          /* 64×64 grid for the perspective demo */
 
 /* Colormap: 64 light levels */
 static uint8_t colormap[64 * 256];
+
+/* RGB mirror of the palette — populated by set_palette so the
+ * translucency-table builder doesn't need to recompute the ramp. */
+static uint32_t pal_rgb[256];
+
+/* 256x256 translucency LUT (Build/Doom convention).  transluc_table[s*256+d]
+ * = palette index whose RGB is closest to (RGB(s) + RGB(d)) / 2.  Uploaded
+ * to the GPU's transluc[] BRAM at startup; spans with OF_GPU_SPAN_TRANSLUC
+ * use it to blend their source pixel against whatever's already in the FB. */
+static uint8_t transluc_table[65536];
 
 /* Simple sin/cos LUT (8-bit fixed-point, 256 entries = full circle) */
 static int16_t sin_lut[256];
@@ -214,7 +238,43 @@ static void set_palette(void) {
             g = (uint8_t)(0x30 + (130 * t) / 31);
             b = (uint8_t)(0x60 + (155 * t) / 31);
         }
-        of_video_palette(i, ((uint32_t)r << 16) | ((uint32_t)g << 8) | b);
+        uint32_t rgb = ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+        of_video_palette(i, rgb);
+        pal_rgb[i] = rgb;
+    }
+}
+
+/* Build the 64 KB translucency LUT.  For each (src, dst) palette index
+ * pair, average the RGB values and find the palette index closest to
+ * the average (Euclidean in RGB space), restricted to indices 16..255
+ * so the blend never lands on the OS terminal's reserved 0..15 band.
+ *
+ * ~16M iterations total → roughly 3-5 seconds on this CPU.  Run once
+ * at startup; the table is then valid for the lifetime of the app
+ * since the palette doesn't change. */
+static void build_translu_table(void) {
+    for (int s = 0; s < 256; s++) {
+        int sr = (pal_rgb[s] >> 16) & 0xFF;
+        int sg = (pal_rgb[s] >>  8) & 0xFF;
+        int sb =  pal_rgb[s]        & 0xFF;
+        for (int d = 0; d < 256; d++) {
+            int dr = (pal_rgb[d] >> 16) & 0xFF;
+            int dg = (pal_rgb[d] >>  8) & 0xFF;
+            int db =  pal_rgb[d]        & 0xFF;
+            int ar = (sr + dr) >> 1;
+            int ag = (sg + dg) >> 1;
+            int ab = (sb + db) >> 1;
+            int best = 16, best_d2 = 0x7FFFFFFF;
+            for (int i = 16; i < 256; i++) {
+                int pr = (pal_rgb[i] >> 16) & 0xFF;
+                int pg = (pal_rgb[i] >>  8) & 0xFF;
+                int pb =  pal_rgb[i]        & 0xFF;
+                int dx = pr - ar, dy = pg - ag, dz = pb - ab;
+                int dist = dx*dx + dy*dy + dz*dz;
+                if (dist < best_d2) { best_d2 = dist; best = i; }
+            }
+            transluc_table[s * 256 + d] = (uint8_t)best;
+        }
     }
 }
 
@@ -413,10 +473,27 @@ static unsigned int _stat_gpu_us = 0;
 /* Per-frame FB setup. CPU clears the framebuffer (SDRAM via M2) and
  * flushes the dirty cache lines back so the GPU sees the cleared
  * bytes when it reads the framebuffer back from M0/M1. */
+/* Set GPUDEMO_USE_CR_WORKAROUNDS=1 to re-enable the cr-gpu-and-tri-
+ * wedges issue 1 / 2 / 3 workarounds (kicks after SET_FB, 8×8 face
+ * textures + kicks between bind and draw, batch-helper triangle
+ * submission).  Default 0 — relies on commit `f68ba00`'s LSU-shim
+ * AW+W race fix to make all three workarounds unnecessary.  Set to
+ * 1 if hardware tests show the wedge persists after the bitstream
+ * rebuild. */
+#ifndef GPUDEMO_USE_CR_WORKAROUNDS
+#define GPUDEMO_USE_CR_WORKAROUNDS 0
+#endif
+
 static void prepare_fb(uint8_t *fb, uint8_t color) {
     memset(fb, color, SCREEN_W * SCREEN_H);
-    OF_SVC->cache_clean_range(fb, SCREEN_W * SCREEN_H);
+    of_cache_clean_range(fb, SCREEN_W * SCREEN_H);
     of_gpu_set_framebuffer((uint32_t)(uintptr_t)fb, SCREEN_W);
+#if GPUDEMO_USE_CR_WORKAROUNDS
+    /* CR issue 1 workaround: wake the GPU after SET_FB so the
+     * posted-write FIFO doesn't stall on a long unkicked stretch.
+     * Removed by default — `f68ba00` fixes the underlying AW+W race. */
+    of_gpu_kick();
+#endif
 }
 
 static void draw_maze_demo(int frame) {
@@ -436,6 +513,10 @@ static void draw_maze_demo(int frame) {
      * overdraw their slices on top. The GPU writes via AXI so there's
      * nothing in the CPU D-cache to flush either. */
     of_gpu_set_framebuffer((uint32_t)(uintptr_t)fb, SCREEN_W);
+#if GPUDEMO_USE_CR_WORKAROUNDS
+    /* CR issue 1 workaround — see prepare_fb. */
+    of_gpu_kick();
+#endif
 
     float ca = cosf(player_a), sa = sinf(player_a);
     /* Camera plane is perpendicular to the facing direction, length =
@@ -503,6 +584,8 @@ static void draw_maze_demo(int frame) {
             of_gpu_draw_span(&cs);
         }
     }
+
+    if (frame == 0) printf("[maze] floor+ceiling spans submitted\n");
 
     /* --- Walls --- */
     for (int x = 0; x < SCREEN_W; x++) {
@@ -585,9 +668,14 @@ static void draw_maze_demo(int frame) {
         of_gpu_draw_span(&col);
     }
 
+    if (frame == 0) printf("[maze] wall spans submitted, calling of_gpu_finish\n");
+
     unsigned int _t1 = of_time_us();
     of_gpu_finish();
     unsigned int _t2 = of_time_us();
+
+    if (frame == 0) printf("[maze] of_gpu_finish returned (%u us)\n", _t2 - _t1);
+
     _stat_cpu_us += _t1 - _t0;
     _stat_gpu_us += _t2 - _t1;
 }
@@ -614,14 +702,27 @@ static uint8_t *face_tex;
 
 static void draw_triangle_demo(int frame) {
     uint8_t *fb = of_video_surface();
-
     unsigned int _t0 = of_time_us();
-    prepare_fb(fb, 0x08);
+    prepare_fb(fb, 0x10);
 
-    /* Initialise per-face texels and flush to SDRAM before GPU draws */
-    for (int i = 0; i < 6; i++)
-        face_tex[i] = face_colors[i];
-    OF_SVC->cache_clean_range(face_tex, 6);
+#if GPUDEMO_USE_CR_WORKAROUNDS
+    /* CR issue 2 workaround: 8×8 instead of 1×1 because the
+     * bitstream's tex cache appeared to wedge on single-texel
+     * fetches.  Sim repro test_triangle_1x1_texture passes —
+     * issue 2 is most likely a hardware-only manifestation of
+     * the issue 1 AW+W race, not a logical cache bug.  Removed
+     * by default — fall back to 1×1 face_tex (populated once at
+     * startup; see main()'s build phase below). */
+    static uint8_t face_tex_8x8[6][64] __attribute__((aligned(16)));
+    static int face_tex_built;
+    if (!face_tex_built) {
+        for (int f = 0; f < 6; f++)
+            for (int i = 0; i < 64; i++)
+                face_tex_8x8[f][i] = face_colors[f];
+        of_cache_clean_range(face_tex_8x8, sizeof(face_tex_8x8));
+        face_tex_built = 1;
+    }
+#endif
 
     int angle_y = frame * 2;
     int angle_x = frame;
@@ -647,30 +748,46 @@ static void draw_triangle_demo(int frame) {
         proj_y[i] = (int16_t)(SCREEN_H / 2 + (ry * 200) / d);
     }
 
-    /* Draw each face as 2 triangles */
+    /* Per-face: bind colour, draw triangle.  Default path uses 1×1
+     * solid-colour textures from face_tex (populated at startup) and
+     * the per-triangle of_gpu_draw_triangles helper — the natural shape
+     * for the demo.  GPUDEMO_USE_CR_WORKAROUNDS=1 brings back the kicks,
+     * 8×8 textures, and batch helper.  See cr-gpu-and-tri-wedges. */
     for (int f = 0; f < 12; f++) {
         int i0 = cube_faces[f][0];
         int i1 = cube_faces[f][1];
         int i2 = cube_faces[f][2];
-
-        /* Simple backface cull via cross product */
         int dx1 = proj_x[i1] - proj_x[i0], dy1 = proj_y[i1] - proj_y[i0];
         int dx2 = proj_x[i2] - proj_x[i0], dy2 = proj_y[i2] - proj_y[i0];
-        if (dx1 * dy2 - dx2 * dy1 <= 0) continue;
+        if (dx1 * dy2 - dx2 * dy1 <= 0) continue;   /* backface cull */
 
-        /* Bind per-face 1-texel texture (no race: each face has its own) */
+#if GPUDEMO_USE_CR_WORKAROUNDS
         of_gpu_texture_t solid_tex = {
-            .addr = (uint32_t)(uintptr_t)&face_tex[f / 2],
-            .width = 1, .height = 1,
+            .addr   = (uint32_t)(uintptr_t)face_tex_8x8[f / 2],
+            .width  = 8, .height = 8,
         };
+#else
+        of_gpu_texture_t solid_tex = {
+            .addr   = (uint32_t)(uintptr_t)&face_tex[f / 2],
+            .width  = 1, .height = 1,
+        };
+#endif
         of_gpu_bind_texture(&solid_tex);
+#if GPUDEMO_USE_CR_WORKAROUNDS
+        of_gpu_kick();          /* CR issue 1 workaround */
+#endif
 
         of_gpu_vertex_t tri[3] = {
             { .x = proj_x[i0] * 16, .y = proj_y[i0] * 16, .r = 0 },
             { .x = proj_x[i1] * 16, .y = proj_y[i1] * 16, .r = 0 },
             { .x = proj_x[i2] * 16, .y = proj_y[i2] * 16, .r = 0 },
         };
+#if GPUDEMO_USE_CR_WORKAROUNDS
+        of_gpu_draw_triangles_batch(tri, 3);   /* CR issue 3 workaround */
+        of_gpu_kick();                         /* CR issue 1 workaround */
+#else
         of_gpu_draw_triangles(tri, 3);
+#endif
     }
 
     unsigned int _t1 = of_time_us();
@@ -821,17 +938,38 @@ static void draw_persp_demo(int frame) {
         verts[i].t = (int32_t)tex[i][1] << 16;
     }
 
-    /* Project to screen + compute per-vertex (s/z, t/z, 1/z) */
+    /* Project to screen + compute per-vertex (s/z, t/z, 1/z).
+     *
+     * z_min raised from 16 to 64.  At z=16 the per-vertex 1/z spans
+     * a 13x range vs the back vertex (z≈200), and the GPU's per-16-px
+     * 1/(1/z) reciprocal can't track that gradient — visible as
+     * texture-coord wrap and "shattered" surfaces at sharp angles.
+     * z_min=64 caps the ratio at ~3x and keeps the texture stable
+     * across the full rotation. */
     int32_t sx[3], sy[3];
     int32_t sZ[3], tZ[3], oZ[3];   /* projection-space attributes (16.16) */
     for (int i = 0; i < 3; i++) {
-        if (verts[i].z < 16) verts[i].z = 16;
+        if (verts[i].z < 64) verts[i].z = 64;
         int32_t zi = verts[i].z;
         sx[i] = (verts[i].x * 200) / zi + (SCREEN_W / 2);
         sy[i] = (verts[i].y * 200) / zi + (SCREEN_H / 2);
         sZ[i] = fdiv16(verts[i].s, zi << 0);  /* s/z, 16.16 */
         tZ[i] = fdiv16(verts[i].t, zi << 0);
         oZ[i] = fdiv16(1 << 16,    zi);       /* 1/z, 16.16 */
+    }
+
+    /* Skip degenerate triangles — at sharp angles the projected
+     * area shrinks below a few pixels and edge interpolation
+     * produces extreme gradients.  Using the 2D cross product as a
+     * signed area: 2 × area = |dx1·dy2 - dx2·dy1|. */
+    {
+        int32_t a = (sx[1] - sx[0]) * (sy[2] - sy[0])
+                  - (sx[2] - sx[0]) * (sy[1] - sy[0]);
+        if (a < 0) a = -a;
+        if (a < 32) {
+            of_gpu_finish();
+            return;
+        }
     }
 
     /* Sort vertices by Y (top, mid, bot) */
@@ -924,6 +1062,73 @@ static void draw_persp_demo(int frame) {
 }
 
 /* ================================================================
+ * Translucent overlay demo: maze background + a moving translucent
+ * rectangle on top.  Demonstrates OF_GPU_SPAN_TRANSLUC blending the
+ * source pixel against whatever's already in the framebuffer using
+ * the uploaded transluc[src][dst] LUT.
+ * ================================================================ */
+
+/* Solid-fill texel for the overlay — set once, never changes. */
+static uint8_t translu_solid_tex[16];
+static int     translu_solid_tex_built;
+
+static void draw_translu_demo(int frame) {
+    /* Step 1: render the maze full-screen as the background.  This
+     * leaves the colormap-lit walls/floor/ceiling in the FB. */
+    draw_maze_demo(frame);
+
+    /* Step 2: lazily build a 16-byte solid texture filled with one
+     * palette index.  Picking 0xE8 = the brighter blue band gives a
+     * cool-tone overlay that contrasts visibly with the warm maze. */
+    if (!translu_solid_tex_built) {
+        for (int i = 0; i < 16; i++) translu_solid_tex[i] = 0xE8;
+        of_cache_clean_range(translu_solid_tex, sizeof(translu_solid_tex));
+        translu_solid_tex_built = 1;
+    }
+
+    /* Step 3: animate a 96x64 rectangle bouncing in a Lissajous path. */
+    uint8_t *fb = of_video_surface();
+    uint32_t fb_addr = (uint32_t)(uintptr_t)fb;
+    int rect_w = 96, rect_h = 64;
+    int amp_x = (SCREEN_W - rect_w) / 2;
+    int amp_y = (SCREEN_H - rect_h) / 2;
+    int rx = (SCREEN_W - rect_w) / 2 + (sin_lut[(frame * 3) & 255] * amp_x) / 256;
+    int ry = (SCREEN_H - rect_h) / 2 + (cos_lut[(frame * 5) & 255] * amp_y) / 256;
+    if (rx < 0) rx = 0;
+    if (ry < 0) ry = 0;
+    if (rx + rect_w > SCREEN_W) rx = SCREEN_W - rect_w;
+    if (ry + rect_h > SCREEN_H) ry = SCREEN_H - rect_h;
+
+    /* Step 4: kick the GPU before the overlay batch — draw_maze_demo's
+     * of_gpu_finish left it idle, so the FIFO would slowly fill before
+     * the next finish without an explicit wake-up.  Same pattern as
+     * prepare_fb / draw_maze_demo's set_framebuffer kick. */
+    of_gpu_kick();
+
+    /* Step 5: submit translucent spans, one per row.  No COLORMAP flag
+     * — the source is a constant palette index, not a texel needing
+     * shade-LUT.  The GPU reads each FB byte under the rectangle, looks
+     * up transluc_table[0xE8][fb_byte], and writes the blended index. */
+    for (int y = 0; y < rect_h; y++) {
+        of_gpu_span_t s = {
+            .fb_addr   = fb_addr + (ry + y) * SCREEN_W + rx,
+            .tex_addr  = (uint32_t)(uintptr_t)translu_solid_tex,
+            .s         = 0,
+            .t         = 0,
+            .sstep     = 0,
+            .tstep     = 0,
+            .count     = rect_w,
+            .light     = 0,
+            .flags     = OF_GPU_SPAN_TRANSLUC,
+            .fb_stride = 1,
+            .tex_width = 16,
+        };
+        of_gpu_draw_span(&s);
+    }
+    of_gpu_finish();
+}
+
+/* ================================================================
  * Main
  * ================================================================ */
 int main(void) {
@@ -952,14 +1157,18 @@ int main(void) {
     build_sprite_texture();
     build_persp_texture();
     build_light_grid();
+    /* Populate the 1×1 face textures (one byte per face) consumed by
+     * draw_triangle_demo.  malloc'd 8 bytes at line above — six are
+     * used, padding rounds to 8 for alignment. */
+    for (int f = 0; f < 6; f++) face_tex[f] = face_colors[f];
     printf("[gpudemo] textures + lightgrid built\n");
 
     /* Flush texture data from CPU D-cache to SDRAM so the GPU can read it */
-    OF_SVC->cache_clean_range(checkerboard_tex, 64 * 64);
-    OF_SVC->cache_clean_range(wall_tex,         64 * 64);
-    OF_SVC->cache_clean_range(sprite_tex,       16 * 16);
-    OF_SVC->cache_clean_range(persp_tex,        64 * 64);
-    OF_SVC->cache_clean_range(face_tex,         8);
+    of_cache_clean_range(checkerboard_tex, 64 * 64);
+    of_cache_clean_range(wall_tex,         64 * 64);
+    of_cache_clean_range(sprite_tex,       16 * 16);
+    of_cache_clean_range(persp_tex,        64 * 64);
+    of_cache_clean_range(face_tex,         8);
     printf("[gpudemo] cache_clean done\n");
 
     /* The stock of_gpu_init() only pulses ring_reset (GPU_CTRL=4). On real
@@ -977,6 +1186,14 @@ int main(void) {
     of_gpu_palookup_upload(0, colormap, sizeof(colormap));
     printf("[gpudemo] colormap uploaded\n");
 
+    /* Translucency LUT — see transluc_table comment.  Slow to build
+     * (~3-5 sec) so do it once after the palette is final and upload
+     * to the GPU's transluc[] BRAM. */
+    printf("[gpudemo] building translucency table...\n");
+    build_translu_table();
+    of_gpu_translucency_upload(transluc_table, sizeof(transluc_table));
+    printf("[gpudemo] translucency table uploaded\n");
+
     {
         uint8_t *fb0 = of_video_surface();
         printf("[gpudemo] surface[0] = %p\n", fb0);
@@ -993,6 +1210,10 @@ int main(void) {
     int frame = 0;
     int auto_switch_at = 600;  /* swap modes every ~10s */
 
+    /* Initial draw slot — kernel hands back whichever slot is currently
+     * free; subsequent acquire_next calls rotate based on just_flipped. */
+    int draw_idx = of_video_acquire_next(-1, 0);
+
     /* CPU% vs GPU% is computed from _stat_cpu_us / _stat_gpu_us, which
      * the draw functions update internally. No timing or finish calls
      * here — the original pipeline ordering (finish inside draw, then
@@ -1003,7 +1224,7 @@ int main(void) {
     while (1) {
         of_input_poll();
         if (of_btn_pressed(OF_BTN_A)) {
-            mode = (mode + 1) % 4;
+            mode = (mode + 1) % 5;
             printf("[gpudemo] mode -> %d\n", mode);
         }
 
@@ -1012,8 +1233,15 @@ int main(void) {
             case 1: draw_persp_demo(frame);    break;
             case 2: draw_triangle_demo(frame); break;
             case 3: draw_multitri_demo(frame); break;
+            case 4: draw_translu_demo(frame);  break;
         }
-        of_video_flip();
+        /* GPU-triggered flip path: emit CMD_FLIP into the ring, kick,
+         * then ask the kernel for the next free draw slot.  CMD_FLIP's
+         * RTL drain stalls on slave_swap_pending so the CPU never
+         * blocks on vsync (kernel acquire_next is non-blocking). */
+        uint32_t flip_token = of_gpu_flip_to(draw_idx);
+        of_gpu_kick();
+        draw_idx = of_video_acquire_next(draw_idx, flip_token);
         fps_frames++;
 
         unsigned int now_ms = of_time_ms();

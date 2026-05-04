@@ -1,13 +1,29 @@
 /*
- * moddemo — Minimal 4-channel MOD player for openfpgaOS
+ * moddemo — minimal 4-channel ProTracker MOD player
  *
- * All mixing in FPGA hardware. CPU only:
- *   1. Parses MOD header, uploads 8-bit samples to CRAM1
- *   2. Reads pattern data and updates voice registers at tick rate
- *   3. Computes effects (portamento, volume slide, arpeggio) in software
+ * Canonical example of:
+ *   - Mapping a tracker channel to a *pinned* hardware mixer voice via
+ *     of_mixer_play (note-on) + of_mixer_retrigger (subsequent notes).
+ *     Stop+play would let the allocator re-pick the slot and channels
+ *     would steal each other — see project memory `mod_voice_pinning`.
+ *   - Uploading 8-bit signed samples to the SDRAM sample pool with
+ *     of_mixer_alloc_samples (the kernel handles the cache flush so
+ *     the HW mixer's AXI master sees committed bytes)
+ *   - Per-voice rate updates with of_mixer_set_rate_raw (Q16.16) on
+ *     the tracker's tick boundary — no per-sample CPU mixing
+ *   - of_mixer_set_filter for the Amiga-A500 low-pass character
  *
- * Loads MOD files from data slots 3 and 4.
- * Press A to switch songs, B to skip to next pattern.
+ * The CPU runs the tracker engine (period table, effect column,
+ * volume slides, arpeggios) at ~50 Hz; everything per-sample is the
+ * HW mixer's job.  This is what makes a MOD demo cheap on Pocket.
+ *
+ * Slot map (per instance.json):
+ *   slot:3  primary MOD file
+ *   slot:4  alternate MOD file (A button switches)
+ *
+ * Controls:
+ *   A   switch between slot:3 and slot:4
+ *   B   skip to next pattern in the song
  */
 
 #include "of.h"

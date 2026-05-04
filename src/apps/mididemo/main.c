@@ -1,15 +1,30 @@
 /*
- * openfpgaOS MIDI Demo Application
+ * mididemo — General-MIDI playback via the SoundFont-driven SW synth
  *
- * MODE 1 (default): plays a MIDI file from slot:3
- * MODE 2 (DPad UP):  diagnostic — plays Guitar/Bass/Snare on loop
- *                    so you can listen and verify each instrument
+ * Canonical example of:
+ *   - Loading a SoundFont bank with of_smp_bank_load (or reusing the
+ *     kernel's auto-loaded preload buffer when one is exposed via
+ *     OF_SVC->smp_bank_preload_base)
+ *   - Driving the SW MIDI engine with of_smp_voice_*: note_on,
+ *     note_off, channel CC updates (volume, expression, pan, bend),
+ *     and the 1 kHz envelope tick that the engine installs in the
+ *     timer ISR
+ *   - of_midi_play() to spool a SMF file through the synth — the
+ *     parser runs in main(), but the actual mixer slot ops happen
+ *     inside the timer ISR via of_midi_pump (see project memory
+ *     `midi_isr_pump`)
+ *   - smp_voice_tick_get_stats() for live voice-load diagnostics
+ *
+ * Modes:
+ *   Default          play the MIDI file at slot:3
+ *   D-pad UP toggle  diagnostic instrument loop — sustained notes for
+ *                    every program so you can audit each preset
  *
  * Controls:
- *   START   = play/pause
- *   SELECT  = restart
- *   DPad UP = toggle diagnostic mode (guitar/bass/snare)
- *   L1/R1   = volume down/up
+ *   START      play / pause
+ *   SELECT     restart
+ *   D-pad UP   diagnostic mode toggle
+ *   L1 / R1    master volume down / up
  */
 
 #include "of.h"

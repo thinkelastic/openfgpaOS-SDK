@@ -12,15 +12,11 @@
             },
             {
                 "id": 2,
-                "filename": "celeste.elf"
+                "filename": "analogcfg.elf"
             },
             {
-                "id": 4,
-                "filename": "celeste-sfx.bin"
-            },
-            {
-                "id": 10,
-                "filename": "Celeste.sav"
+                "id": 8,
+                "filename": "analogizer.cfg"
             }
         ]
     }

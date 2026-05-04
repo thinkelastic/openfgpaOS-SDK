@@ -206,9 +206,10 @@ uint8_t *of_video_surface(void) {
     return g_fb[g_draw_buf];
 }
 
-void of_video_flip(void) {
+uint8_t *of_video_flip(void) {
     composite_and_present();
     g_draw_buf ^= 1;
+    return g_fb[g_draw_buf];
 }
 
 void of_video_sync(void) {

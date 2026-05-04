@@ -68,12 +68,26 @@ void test_mixer(void) {
         of_mixer_set_loop(v4, 0, MIX_TONE_LEN);
         usleep(20 * 1000);
         int pos = of_mixer_get_position(v4);
-        ASSERT("MX.09 pos rd", pos > 0 && pos < MIX_TONE_LEN);
+        /* After 20ms at 11025Hz playing into a 551-sample loop, pos
+         * should be ~220 samples (well within [0, MIX_TONE_LEN)). */
+        if (pos > 0 && pos < MIX_TONE_LEN) {
+            test_pass("MX.09 pos rd");
+        } else {
+            snprintf(__buf, sizeof(__buf), "v=%d pos=%d", v4, pos);
+            test_fail("MX.09 pos rd", __buf);
+        }
+
         of_mixer_set_position(v4, 0);
         usleep(5 * 1000);
         int pos2 = of_mixer_get_position(v4);
-        /* After seek to 0 + 5ms at 11025Hz, pos2 ≈ 55 samples */
-        ASSERT("MX.10 pos wr", pos2 < MIX_TONE_LEN / 4);
+        /* After seek-to-0 + 5ms at 11025Hz, pos2 ≈ 55 samples (well
+         * under MIX_TONE_LEN/4 = 137). */
+        if (pos2 < MIX_TONE_LEN / 4) {
+            test_pass("MX.10 pos wr");
+        } else {
+            snprintf(__buf, sizeof(__buf), "v=%d pos=%d", v4, pos2);
+            test_fail("MX.10 pos wr", __buf);
+        }
     }
 
     of_mixer_stop_all();
@@ -244,8 +258,14 @@ void test_mixer_adv(void) {
                 of_mixer_set_loop(v, 0, RATE_TONE_LEN);
                 usleep(10 * 1000);  /* 10ms */
                 int pos = of_mixer_get_position(v);
-                /* At 48kHz, 10ms = 480 samples. Allow 384-576 (±20%) */
-                ASSERT("MA.10b rate", pos >= 384 && pos <= 576);
+                /* At 48 kHz × 10 ms = 480 source samples.  Allow
+                 * 384-576 (±20%) for timer + scheduler jitter. */
+                if (pos >= 384 && pos <= 576) {
+                    test_pass("MA.10b rate");
+                } else {
+                    snprintf(__buf, sizeof(__buf), "v=%d pos=%d (want 384..576)", v, pos);
+                    test_fail("MA.10b rate", __buf);
+                }
                 of_mixer_stop(v);
             }
         }
@@ -266,8 +286,16 @@ void test_mixer_adv(void) {
                 of_mixer_set_loop(v, 0, RATE_TONE_LEN);
                 usleep(10 * 1000);
                 int pos = of_mixer_get_position(v);
-                /* At 24kHz, 10ms = 240 samples. Allow ±20%: 192-288 */
-                ASSERT("MA.11 half", pos >= 192 && pos <= 288);
+                /* At 24 kHz × 10 ms = 240 source samples.  Allow
+                 * 192-288 (±20%).  If this returns ~480 the rate
+                 * field is being ignored and the voice is playing
+                 * at the output rate (= 48 kHz). */
+                if (pos >= 192 && pos <= 288) {
+                    test_pass("MA.11 half");
+                } else {
+                    snprintf(__buf, sizeof(__buf), "v=%d pos=%d (want 192..288)", v, pos);
+                    test_fail("MA.11 half", __buf);
+                }
                 of_mixer_stop(v);
             }
         }

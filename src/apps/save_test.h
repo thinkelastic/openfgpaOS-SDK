@@ -1,10 +1,25 @@
 /*
  * save_test.h -- shared save cross-pollution test logic
  *
- * Used by savea/ and saveb/. Each app defines APP_ID, APP_NAME, STEP and
- * (optionally) VSAVE_SIZE_EVEN, then #includes this header and calls
- * save_test_main() from main(). Running the apps alternately exercises
- * save isolation between distinct app IDs.
+ * Canonical example of:
+ *   - Naming saves `<APP>_<N>.sav` so each app gets its own save namespace
+ *     in the APF data slots (slot:10..slot:19)
+ *   - Using POSIX fopen/fread/fwrite/fseek for save I/O — the kernel
+ *     bounces through CRAM0 and into the APF data slot transparently
+ *   - The four equivalent paths the kernel accepts for a save: the
+ *     registered filename, `save:N`, `save_N`, and `slot:10+N`.  Apps
+ *     should pick one form and stick to it; this test exercises all four
+ *     to verify the VFS surface is consistent.
+ *   - CRC32 + magic-on-disk patterns for detecting cross-app corruption
+ *     (a bug elsewhere that lets app A overwrite app B's slot would
+ *     surface as a magic / app_id mismatch on next boot).
+ *
+ * Used by `savea/` and `saveb/`.  Each app defines APP_ID, APP_NAME,
+ * STEP and (optionally) VSAVE_SIZE_EVEN before including this header,
+ * then calls save_test_main() from main().  Running the apps
+ * alternately rotates saves and rechecks identity, so any cross-app
+ * corruption shows up as the wrong APP_ID in a slot the other app
+ * just wrote.
  */
 
 #ifndef OF_SAVE_TEST_H
