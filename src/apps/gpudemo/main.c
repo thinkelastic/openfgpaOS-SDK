@@ -36,6 +36,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <math.h>
 #include "of.h"
 #include "of_cache.h"
@@ -473,27 +474,10 @@ static unsigned int _stat_gpu_us = 0;
 /* Per-frame FB setup. CPU clears the framebuffer (SDRAM via M2) and
  * flushes the dirty cache lines back so the GPU sees the cleared
  * bytes when it reads the framebuffer back from M0/M1. */
-/* Set GPUDEMO_USE_CR_WORKAROUNDS=1 to re-enable the cr-gpu-and-tri-
- * wedges issue 1 / 2 / 3 workarounds (kicks after SET_FB, 8×8 face
- * textures + kicks between bind and draw, batch-helper triangle
- * submission).  Default 0 — relies on commit `f68ba00`'s LSU-shim
- * AW+W race fix to make all three workarounds unnecessary.  Set to
- * 1 if hardware tests show the wedge persists after the bitstream
- * rebuild. */
-#ifndef GPUDEMO_USE_CR_WORKAROUNDS
-#define GPUDEMO_USE_CR_WORKAROUNDS 0
-#endif
-
 static void prepare_fb(uint8_t *fb, uint8_t color) {
     memset(fb, color, SCREEN_W * SCREEN_H);
     of_cache_clean_range(fb, SCREEN_W * SCREEN_H);
     of_gpu_set_framebuffer((uint32_t)(uintptr_t)fb, SCREEN_W);
-#if GPUDEMO_USE_CR_WORKAROUNDS
-    /* CR issue 1 workaround: wake the GPU after SET_FB so the
-     * posted-write FIFO doesn't stall on a long unkicked stretch.
-     * Removed by default — `f68ba00` fixes the underlying AW+W race. */
-    of_gpu_kick();
-#endif
 }
 
 static void draw_maze_demo(int frame) {
@@ -513,10 +497,6 @@ static void draw_maze_demo(int frame) {
      * overdraw their slices on top. The GPU writes via AXI so there's
      * nothing in the CPU D-cache to flush either. */
     of_gpu_set_framebuffer((uint32_t)(uintptr_t)fb, SCREEN_W);
-#if GPUDEMO_USE_CR_WORKAROUNDS
-    /* CR issue 1 workaround — see prepare_fb. */
-    of_gpu_kick();
-#endif
 
     float ca = cosf(player_a), sa = sinf(player_a);
     /* Camera plane is perpendicular to the facing direction, length =
@@ -705,25 +685,6 @@ static void draw_triangle_demo(int frame) {
     unsigned int _t0 = of_time_us();
     prepare_fb(fb, 0x10);
 
-#if GPUDEMO_USE_CR_WORKAROUNDS
-    /* CR issue 2 workaround: 8×8 instead of 1×1 because the
-     * bitstream's tex cache appeared to wedge on single-texel
-     * fetches.  Sim repro test_triangle_1x1_texture passes —
-     * issue 2 is most likely a hardware-only manifestation of
-     * the issue 1 AW+W race, not a logical cache bug.  Removed
-     * by default — fall back to 1×1 face_tex (populated once at
-     * startup; see main()'s build phase below). */
-    static uint8_t face_tex_8x8[6][64] __attribute__((aligned(16)));
-    static int face_tex_built;
-    if (!face_tex_built) {
-        for (int f = 0; f < 6; f++)
-            for (int i = 0; i < 64; i++)
-                face_tex_8x8[f][i] = face_colors[f];
-        of_cache_clean_range(face_tex_8x8, sizeof(face_tex_8x8));
-        face_tex_built = 1;
-    }
-#endif
-
     int angle_y = frame * 2;
     int angle_x = frame;
     int sy = sin_lut[angle_y & 255], cy = cos_lut[angle_y & 255];
@@ -748,11 +709,9 @@ static void draw_triangle_demo(int frame) {
         proj_y[i] = (int16_t)(SCREEN_H / 2 + (ry * 200) / d);
     }
 
-    /* Per-face: bind colour, draw triangle.  Default path uses 1×1
-     * solid-colour textures from face_tex (populated at startup) and
-     * the per-triangle of_gpu_draw_triangles helper — the natural shape
-     * for the demo.  GPUDEMO_USE_CR_WORKAROUNDS=1 brings back the kicks,
-     * 8×8 textures, and batch helper.  See cr-gpu-and-tri-wedges. */
+    /* Per-face: bind a 1×1 solid-colour texture and draw the
+     * triangle via the per-triangle helper — the natural shape for
+     * a "one face = one colour" cube. */
     for (int f = 0; f < 12; f++) {
         int i0 = cube_faces[f][0];
         int i1 = cube_faces[f][1];
@@ -761,33 +720,18 @@ static void draw_triangle_demo(int frame) {
         int dx2 = proj_x[i2] - proj_x[i0], dy2 = proj_y[i2] - proj_y[i0];
         if (dx1 * dy2 - dx2 * dy1 <= 0) continue;   /* backface cull */
 
-#if GPUDEMO_USE_CR_WORKAROUNDS
-        of_gpu_texture_t solid_tex = {
-            .addr   = (uint32_t)(uintptr_t)face_tex_8x8[f / 2],
-            .width  = 8, .height = 8,
-        };
-#else
         of_gpu_texture_t solid_tex = {
             .addr   = (uint32_t)(uintptr_t)&face_tex[f / 2],
             .width  = 1, .height = 1,
         };
-#endif
         of_gpu_bind_texture(&solid_tex);
-#if GPUDEMO_USE_CR_WORKAROUNDS
-        of_gpu_kick();          /* CR issue 1 workaround */
-#endif
 
         of_gpu_vertex_t tri[3] = {
             { .x = proj_x[i0] * 16, .y = proj_y[i0] * 16, .r = 0 },
             { .x = proj_x[i1] * 16, .y = proj_y[i1] * 16, .r = 0 },
             { .x = proj_x[i2] * 16, .y = proj_y[i2] * 16, .r = 0 },
         };
-#if GPUDEMO_USE_CR_WORKAROUNDS
-        of_gpu_draw_triangles_batch(tri, 3);   /* CR issue 3 workaround */
-        of_gpu_kick();                         /* CR issue 1 workaround */
-#else
         of_gpu_draw_triangles(tri, 3);
-#endif
     }
 
     unsigned int _t1 = of_time_us();
@@ -900,7 +844,10 @@ static int32_t fdiv16(int32_t num, int32_t den) {
     /* signed 16.16 division: (num << 16) / den, clamped */
     if (den == 0) return 0;
     int64_t n = ((int64_t)num) << 16;
-    return (int32_t)(n / den);
+    int64_t q = n / den;
+    if (q > INT32_MAX) return INT32_MAX;
+    if (q < INT32_MIN) return INT32_MIN;
+    return (int32_t)q;
 }
 
 static void draw_persp_demo(int frame) {
@@ -908,6 +855,13 @@ static void draw_persp_demo(int frame) {
     uint32_t fb_addr = (uint32_t)(uintptr_t)fb;
 
     unsigned int _t0 = of_time_us();
+    /* Defensive: the rotation-1-broken-rotation-2-clean symptom on hardware
+     * recurs on every mode-1 entry, points at GPU state surviving from the
+     * prior mode.  Flush tex cache + reassert the colormap slot we want; if
+     * the bug disappears, the survivor was either tex_cache contents or a
+     * stale st_colormap_id from a different SET_COLORMAP_ID call. */
+    GPU_TEX_FLUSH = 1;
+    of_gpu_set_colormap_id(0);
     prepare_fb(fb, 0x10);
 
     /* Three vertices of a triangle in world space, rotating about the
@@ -923,8 +877,8 @@ static void draw_persp_demo(int frame) {
     };
     static const int16_t tex[3][2] = {
         {   0,   0 },
-        {  64,   0 },
-        {  32,  64 },
+        {  63,   0 },
+        {  31,  63 },
     };
     for (int i = 0; i < 3; i++) {
         /* Rotate base[i] about Y so the triangle tilts in/out of the screen */
@@ -940,16 +894,21 @@ static void draw_persp_demo(int frame) {
 
     /* Project to screen + compute per-vertex (s/z, t/z, 1/z).
      *
-     * z_min raised from 16 to 64.  At z=16 the per-vertex 1/z spans
+     * z_min raised from 16 to 128.  At z=16 the per-vertex 1/z spans
      * a 13x range vs the back vertex (z≈200), and the GPU's per-16-px
      * 1/(1/z) reciprocal can't track that gradient — visible as
      * texture-coord wrap and "shattered" surfaces at sharp angles.
-     * z_min=64 caps the ratio at ~3x and keeps the texture stable
-     * across the full rotation. */
+     *
+     * SPAN_PERSP's s/z and t/z inputs are signed 16.16 values.  With a
+     * 64x64 texture, the last valid texel coordinate is 63; keeping
+     * z >= 128 ensures (63/z) fits the signed projection-space format.
+     * The old demo used coord 64 at z=127/128, which wrapped sdivz
+     * negative and made the GPU fetch before the texture base near the
+     * high-angle apex. */
     int32_t sx[3], sy[3];
     int32_t sZ[3], tZ[3], oZ[3];   /* projection-space attributes (16.16) */
     for (int i = 0; i < 3; i++) {
-        if (verts[i].z < 64) verts[i].z = 64;
+        if (verts[i].z < 128) verts[i].z = 128;
         int32_t zi = verts[i].z;
         sx[i] = (verts[i].x * 200) / zi + (SCREEN_W / 2);
         sy[i] = (verts[i].y * 200) / zi + (SCREEN_H / 2);
@@ -1099,13 +1058,7 @@ static void draw_translu_demo(int frame) {
     if (rx + rect_w > SCREEN_W) rx = SCREEN_W - rect_w;
     if (ry + rect_h > SCREEN_H) ry = SCREEN_H - rect_h;
 
-    /* Step 4: kick the GPU before the overlay batch — draw_maze_demo's
-     * of_gpu_finish left it idle, so the FIFO would slowly fill before
-     * the next finish without an explicit wake-up.  Same pattern as
-     * prepare_fb / draw_maze_demo's set_framebuffer kick. */
-    of_gpu_kick();
-
-    /* Step 5: submit translucent spans, one per row.  No COLORMAP flag
+    /* Step 4: submit translucent spans, one per row.  No COLORMAP flag
      * — the source is a constant palette index, not a texel needing
      * shade-LUT.  The GPU reads each FB byte under the rectangle, looks
      * up transluc_table[0xE8][fb_byte], and writes the blended index. */
