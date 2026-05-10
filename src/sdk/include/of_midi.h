@@ -2,8 +2,8 @@
  * of_midi.h -- Standard MIDI File playback for openfpgaOS
  *
  * Renders Format 0 / Format 1 .mid files with the sample-based
- * synthesizer (of_smp_voice + of_smp_bank).  Non-blocking: call
- * of_midi_pump() from your game loop or idle hook.
+ * synthesizer (of_smp_voice + of_smp_bank).  Non-blocking: playback
+ * installs of_midi_pump() on the timer ISR.
  *
  * Requirements:
  *   - A .ofsf bank must be staged in a data slot. The kernel detects
@@ -16,13 +16,14 @@
  *   of_midi_init();
  *   of_midi_play(midi_data, midi_len, 1);  // loop
  *   while (1) {
- *       // ... game logic ...  (pump runs in timer ISR at 500 Hz)
+ *       // ... game logic ...  (pump runs in timer ISR at 50 Hz)
  *   }
  *
  * Note: of_midi_play() installs of_midi_pump as the machine-timer ISR
- * callback at 500 Hz, so the mixer is driven independently of the main
- * thread.  Do NOT call of_midi_pump() from the main loop while playback
- * is active — the ISR owns it and concurrent calls will race.
+ * callback at 50 Hz, so the mixer is driven independently of the main
+ * thread. The pump advances 1 kHz logical envelope ticks based on elapsed
+ * time. Do NOT call of_midi_pump() from the main loop while playback is
+ * active; the ISR owns it and concurrent calls will race.
  */
 
 #ifndef OF_MIDI_H
@@ -61,7 +62,7 @@ void of_midi_resume(void);
 
 /* Process pending MIDI events and advance envelopes.
  * Installed as the machine-timer ISR callback by of_midi_play() and
- * called internally at 500 Hz.  Do NOT invoke from the main loop while
+ * called internally at 50 Hz.  Do NOT invoke from the main loop while
  * playback is active. */
 void of_midi_pump(void);
 

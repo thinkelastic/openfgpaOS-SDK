@@ -954,7 +954,7 @@ md13_done:;
 void test_midi_smp(void) {
     section_start("MIDI Smp");
 
-    of_mixer_init(48, OF_MIXER_OUTPUT_RATE);
+    of_mixer_init(OF_MIXER_MAX_VOICES, OF_MIXER_OUTPUT_RATE);
     of_mixer_set_master_volume(255);
     of_mixer_set_group_volume(OF_MIXER_GROUP_MUSIC, 255);
 

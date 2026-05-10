@@ -11,7 +11,8 @@
  *     the HW mixer's AXI master sees committed bytes)
  *   - Per-voice rate updates with of_mixer_set_rate_raw (Q16.16) on
  *     the tracker's tick boundary — no per-sample CPU mixing
- *   - of_mixer_set_filter for the Amiga-A500 low-pass character
+ *   - Reserved of_mixer_set_filter calls for the Amiga-A500 low-pass
+ *     path; current firmware keeps that API as a no-op compatibility hook
  *
  * The CPU runs the tracker engine (period table, effect column,
  * volume slides, arpeggios) at ~50 Hz; everything per-sample is the
@@ -66,7 +67,7 @@ typedef struct {
     uint8_t      order[MOD_MAX_PATTERNS];
     int          num_patterns;
     uint8_t     *pattern_data;  /* raw pattern bytes */
-    int8_t      *sample_data[MOD_NUM_SAMPLES]; /* pointers into CRAM1 */
+    int8_t      *sample_data[MOD_NUM_SAMPLES]; /* pointers into SDRAM sample pool */
 } mod_file_t;
 
 /* ======================================================================
@@ -83,10 +84,9 @@ static const uint16_t period_table[36] = {
  * Amiga base clock = 7093789.2 Hz (PAL), period is clock divider. */
 #define AMIGA_CLOCK 7093789
 
-/* Amiga-style low-pass: the A500 output stage rolled off around 7 kHz
- * (LED filter off).  SVF cutoff is Q0.16 where 65535 = Nyquist (24 kHz).
- * 7 kHz → 7000/24000 × 65536 ≈ 19115.  A touch of resonance (Q ≈ 20)
- * adds a slight presence bump at the cutoff. */
+/* Reserved Amiga-style low-pass settings. The current mixer firmware
+ * ignores of_mixer_set_filter(), but keeping the values here preserves
+ * the intended A500-style path for hardware that implements it later. */
 #define MOD_LPF_CUTOFF  35000
 #define MOD_LPF_Q       80
 
@@ -217,7 +217,7 @@ static int parse_mod(mod_file_t *m, const uint8_t *data, uint32_t len) {
     /* Sample data follows patterns */
     uint32_t sample_offset = 1084 + m->num_patterns * MOD_ROWS_PER_PAT * MOD_NUM_CHANNELS * 4;
 
-    /* Upload samples to CRAM1, converting 8-bit signed → 16-bit signed.
+    /* Upload samples to the SDRAM mixer pool, converting 8-bit signed to 16-bit signed.
      * The hardware mixer expects 16-bit samples via of_mixer_play. */
     for (int i = 0; i < MOD_NUM_SAMPLES; i++) {
         uint32_t slen = m->samples[i].length;
@@ -233,7 +233,7 @@ static int parse_mod(mod_file_t *m, const uint8_t *data, uint32_t len) {
         /* Allocate 2 bytes per sample (16-bit) */
         int16_t *cram = (int16_t *)of_mixer_alloc_samples(slen * 2);
         if (!cram) {
-            printf("CRAM1 full at sample %d\n", i + 1);
+            printf("sample pool full at sample %d\n", i + 1);
             m->sample_data[i] = NULL;
             continue;
         }

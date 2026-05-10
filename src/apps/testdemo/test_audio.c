@@ -107,7 +107,7 @@ void test_mixer_adv(void) {
     of_mixer_poll_ended();
     of_mixer_free_samples();
 
-    /* Generate tone in CRAM1 */
+    /* Generate tone in the SDRAM mixer sample pool */
     #define ADV_TONE_LEN 551
     static int16_t adv_tone_src[ADV_TONE_LEN];
     for (int i = 0; i < ADV_TONE_LEN; i++)
@@ -199,7 +199,8 @@ void test_mixer_adv(void) {
         }
     }
 
-    /* MA.07: bidi looping — play with bidi, verify stays active */
+    /* MA.07: bidi compatibility surface -- current firmware ignores bidi,
+     * but the call must remain harmless while a forward loop stays active. */
     {
         int v = of_mixer_play((const uint8_t *)s16_buf, ADV_TONE_LEN, 11025, 0, 100);
         if (v >= 0) {
@@ -384,11 +385,11 @@ void test_mixer_adv(void) {
 }
 
 /* ================================================================
- * Stress test: 31 PCM voices + OPL3 simultaneously
+ * Stress test: many PCM voices simultaneously
  *
  * This simulates a worst-case game-audio scenario: many SFX playing
- * while MIDI music runs on OPL3. Tests mixer FSM timing budget,
- * CRAM1 bus bandwidth, and audio FIFO underrun.
+ * while music owns other mixer voices. Tests mixer FSM timing budget,
+ * SDRAM sample bandwidth, and audio FIFO underrun.
  * ================================================================ */
 void test_mixer_stress(void) {
     section_start("Mixer Strss");

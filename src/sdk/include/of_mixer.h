@@ -1,9 +1,9 @@
 /*
  * of_mixer.h -- PCM Mixer API for openfpgaOS
  *
- * 32-voice CPU-side software mixer.  Runs from the 1 kHz timer ISR,
- * produces 48 stereo samples per block, and pushes them to the
- * audio_output dcfifo.  Sample-based MIDI synthesis (of_midi /
+ * 32-voice hardware PCM mixer.  The FPGA fetches samples from the
+ * SDRAM sample pool, resamples each active voice, and mixes to fixed
+ * 48 kHz stereo output.  Sample-based MIDI synthesis (of_midi /
  * of_smp_voice) drives this same mixer.
  *
  * Usage:
@@ -11,11 +11,18 @@
  *   2. Allocate sample memory: buf = of_mixer_alloc_samples(size)
  *   3. Load 16-bit signed mono PCM data into buf
  *   4. Play: of_mixer_play(buf, sample_count, sample_rate, 0, volume)
- *   5. Optionally set loop, rate, stereo volume, bidi, position
+ *   5. Optionally set forward loop, rate, stereo volume, position
+ *
+ * Native sample format: 16-bit signed mono PCM in the mixer sample pool.
+ * The 8-bit API accepts signed 8-bit mono PCM and expands it to 16-bit.
  *
  * Volume: 0-255 per channel.
  * Resampling: 16.16 fixed-point rate, linear interpolation.
  * Volume ramp: per-sample step, configurable rate.
+ *
+ * of_mixer_pump() is kept for source compatibility and is a no-op on
+ * current firmware.  Bidirectional looping and per-voice filtering are
+ * ABI surfaces retained for older callers; current hardware ignores them.
  */
 
 #ifndef OF_MIXER_H
@@ -163,9 +170,8 @@ static inline void of_mixer_set_master_volume(int volume) {
     OF_SVC->mixer_set_master_volume(volume);
 }
 
-/* Per-voice SVF low-pass filter.  cutoff_q016 is a Q0.16 register
- * value (65535 ≈ wide-open), q is 0..255 resonance, enable gates
- * the filter into the voice's signal path. */
+/* Reserved per-voice filter surface. Current firmware keeps this entry
+ * for source/ABI compatibility but does not implement filtering. */
 static inline void of_mixer_set_filter(int voice, int cutoff_q016, int q, int enable) {
     OF_SVC->mixer_set_filter(voice, cutoff_q016, q, enable);
 }

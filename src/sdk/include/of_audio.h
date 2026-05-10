@@ -1,12 +1,12 @@
 /*
  * of_audio.h -- Audio subsystem API for openfpgaOS
  *
- * 48 kHz stereo PCM path.  Apps write interleaved stereo s16 pairs; the
- * OS software mixer composes them with SF2 voices and mixer SFX into a
- * single stream and pushes it to the audio FIFO.
+ * 48 kHz stereo PCM path. Apps write interleaved stereo s16 pairs; the
+ * OS streams them through an SDRAM ring played by a reserved hardware
+ * mixer voice.
  *
- * MIDI playback is layered on top of the same software mixer via
- * of_midi.h / of_smp_voice.h.
+ * MIDI playback is sample-based and layered on the same hardware mixer
+ * via of_midi.h / of_smp_voice.h.
  */
 
 #ifndef OF_AUDIO_H

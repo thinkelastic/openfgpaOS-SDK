@@ -27,10 +27,10 @@
  *
  * Platform: Analogue Pocket FPGA, RISC-V (VexRiscv) @ 100 MHz
  * Video:    320x240, 8-bit indexed color, double-buffered
- * Audio:    48 kHz PCM FIFO + 48-voice hardware mixer; sample-based
+ * Audio:    48 kHz PCM FIFO + 32-voice hardware mixer; sample-based
  *           MIDI synth (SF2 → .ofsf banks)
  * Input:    2 controllers, d-pad + ABXY + L/R + sticks + triggers
- * Memory:   64 MB SDRAM, 16 MB CRAM0, 16 MB CRAM1, 256 KB SRAM
+ * Memory:   64 MB SDRAM; CRAM0 bridge staging/save window
  */
 
 #ifndef OF_H

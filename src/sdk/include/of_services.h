@@ -140,14 +140,14 @@ struct of_services_table {
      *    The openFPGA manifest identifies data slots by numeric id;
      *    this service lets apps tell the kernel which id holds which
      *    filename so fopen() by name resolves correctly. Overwrites
-     *    any prior mapping for the same filename. Max 16 entries. */
+     *    any prior mapping for the same filename. Max 32 entries. */
     void      (*file_slot_register)(uint32_t slot_id, const char *filename);
 
     /* -- SoundFont preload (append-only, ABI-stable) --
      *    The kernel auto-loads the first .ofsf file it finds in a data
      *    slot during boot. Apps should check smp_bank_preload_base and,
      *    when non-NULL, skip of_smp_bank_load() / of_mixer_alloc_samples
-     *    and reuse the preloaded CRAM1 buffer directly. Older firmware
+     *    and reuse the preloaded SDRAM sample-pool buffer directly. Older firmware
      *    leaves these as NULL/0. */
     const void *smp_bank_preload_base;
     uint32_t    smp_bank_preload_size;

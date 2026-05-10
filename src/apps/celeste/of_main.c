@@ -9,7 +9,7 @@
  *   - SDL_SetPaletteColors against the surface's palette object,
  *     and SDL_GetKeyboardState returning a SCANCODE-indexed array
  *     (`kbstate[SDL_SCANCODE_LEFT]`, not `kbstate[SDLK_LEFT]`).
- *   - SDL_Mixer for audio init, mapping onto of_audio_stream_*.
+ *   - SDL_Mixer for SFX init, mapping onto the hardware mixer.
  *   - Wiring the on-board controller into SDL keyboard events under
  *     the hood — the game's main loop sees standard SDL2 input and
  *     doesn't know it's running on a Pocket.
@@ -72,7 +72,7 @@ typedef struct __attribute__((packed)) {
 } celeste_sfx_header_t;
 
 static Mix_Chunk *sfx_bank[CELESTE_SFX_NUM];
-static uint8_t   *sfx_blob;       /* whole file kept around — Mix_Chunks point into it */
+static uint8_t   *sfx_blob;       /* whole file kept around while WAV chunks parse */
 static int        sfx_loaded;     /* count of clips successfully decoded */
 
 /* ======================================================================
@@ -172,26 +172,25 @@ static Mix_Chunk *make_chunk_from_wav(const uint8_t *wav, uint32_t size) {
     if (result.bits_per_sample == 16) num_samples /= 2;
     if (result.channels == 2)         num_samples /= 2;
 
-    uint8_t *pcm_u8 = (uint8_t *)malloc(num_samples);
-    if (!pcm_u8) return NULL;
+    int16_t *pcm_s16 = (int16_t *)of_mixer_alloc_samples(num_samples * sizeof(int16_t));
+    if (!pcm_s16) return NULL;
 
-    /* PICO-8 SFX are 16-bit mono at 22050 Hz.  Down-convert to unsigned
-     * 8-bit for the mixer's playback path; the high byte of each int16
-     * + 128 is a clean A-law-ish mapping without dithering. */
+    /* PICO-8 SFX are 16-bit mono at 22050 Hz. Keep them as signed
+     * 16-bit in the SDRAM sample pool for the hardware mixer. */
     if (result.bits_per_sample == 16) {
         const int16_t *s = (const int16_t *)result.pcm;
         int step = result.channels;
         for (uint32_t i = 0; i < num_samples; i++)
-            pcm_u8[i] = (uint8_t)((s[i * step] >> 8) + 128);
+            pcm_s16[i] = s[i * step];
     } else {
         int step = result.channels;
         for (uint32_t i = 0; i < num_samples; i++)
-            pcm_u8[i] = result.pcm[i * step];
+            pcm_s16[i] = (int16_t)(((int)result.pcm[i * step] - 128) << 8);
     }
 
     Mix_Chunk *chunk = (Mix_Chunk *)calloc(1, sizeof(Mix_Chunk));
-    if (!chunk) { free(pcm_u8); return NULL; }
-    chunk->pcm_u8       = pcm_u8;
+    if (!chunk) return NULL;
+    chunk->pcm_s16      = pcm_s16;
     chunk->sample_count = num_samples;
     chunk->sample_rate  = result.sample_rate;
     chunk->volume       = MIX_MAX_VOLUME;
