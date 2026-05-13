@@ -58,7 +58,9 @@ static const char *pick_file(char *out, size_t outsz) {
         struct stat st;
         if (stat(e->d_name, &st) != 0) continue;
         if (st.st_size < 512) continue;
-        snprintf(out, outsz, "%s", e->d_name);
+        size_t name_len = strlen(e->d_name);
+        if (name_len >= outsz) continue;
+        memcpy(out, e->d_name, name_len + 1);
         closedir(d);
         return out;
     }
@@ -76,7 +78,7 @@ int main(void) {
     printf("\033[2J\033[H");
     printf("freadalign — fread destination-alignment regression test\n\n");
 
-    char fname[64];
+    char fname[256];
     if (!pick_file(fname, sizeof(fname))) {
         printf("No suitable file found on card (need >= 512 B).\n");
         park();

@@ -32,7 +32,7 @@
                 "name": "Data 1",
                 "required": false,
                 "parameters": 0,
-                "extensions": ["mid", "mod", "dat", "png", "bin", "grp", "pak", "wad", "rom", "nes"],
+                "extensions": ["mid", "mod", "dat", "png", "bin", "grp", "pak", "wad", "rom", "nes", "iso"],
                 "deferload": true
             },
             {
@@ -40,7 +40,7 @@
                 "name": "Data 2",
                 "required": false,
                 "parameters": 0,
-                "extensions": ["mid", "mod", "ofsf", "dat", "png", "bin", "grp", "pak", "wad", "rom", "nes"],
+                "extensions": ["mid", "mod", "ofsf", "dat", "png", "bin", "grp", "pak", "wad", "rom", "nes", "iso"],
                 "deferload": true
             },
             {
@@ -48,7 +48,7 @@
                 "name": "Data 3",
                 "required": false,
                 "parameters": 0,
-                "extensions": ["mid", "dat", "png", "bin", "grp", "pak", "wad", "rom", "nes"],
+                "extensions": ["mid", "dat", "png", "bin", "grp", "pak", "wad", "rom", "nes", "iso"],
                 "deferload": true
             },
             {
@@ -56,7 +56,7 @@
                 "name": "Data 4",
                 "required": false,
                 "parameters": 0,
-                "extensions": ["mid", "dat", "png", "bin", "grp", "pak", "wad", "rom", "nes"],
+                "extensions": ["mid", "dat", "png", "bin", "grp", "pak", "wad", "rom", "nes", "iso"],
                 "deferload": true
             },
             {
