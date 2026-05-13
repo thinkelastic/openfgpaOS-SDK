@@ -9,8 +9,8 @@ Build games for the [Analogue Pocket](https://www.analogue.co/pocket) in C or C+
 ## Quick Start
 
 ```bash
-git clone https://github.com/ThinkElastic/openfpgaOS-SDK.git
-cd openfpgaOS-SDK
+git clone https://github.com/openfpgaOS/openfgpaSDK.git
+cd openfgpaSDK
 make setup                    # install RISC-V toolchain
 make core                     # create your app (follow the prompts)
 cd src/mygame
@@ -800,7 +800,7 @@ For larger ports (Duke Nukem, Doom, etc.) that carry their own build system:
 ## Project Structure
 
 ```
-openfpgaOS-SDK/
+openfgpaSDK/
 ├── Makefile              <- Top-level: build, copy, debug, package
 ├── GETTING_STARTED.md    <- Quick start guide for developers
 ├── src/
@@ -864,4 +864,4 @@ SDK-owned files (headers, core configs, runtime, templates) update automatically
 
 ## Reference
 
-This SDK builds apps for [openfpgaOS](https://github.com/ThinkElastic/openfpgaOS) — a RISC-V operating system running on the Analogue Pocket's Cyclone V FPGA. The openfpgaOS repo is the source of truth for API headers and the OS kernel. See that repo for architecture details, FPGA design, and OS internals.
+This SDK builds apps for [openfpgaOS](https://github.com/openfpgaOS/openfpgaOS) — a RISC-V operating system running on the Analogue Pocket's Cyclone V FPGA. The openfpgaOS repo is the source of truth for API headers and the OS kernel. See that repo for architecture details, FPGA design, and OS internals.

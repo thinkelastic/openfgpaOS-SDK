@@ -12,8 +12,7 @@
  *   fread() of an SDK-opened FILE* used to silently return 0 bytes when
  *   the destination pointer was not 512-byte aligned.  Root cause was
  *   a kernel DMA path that latched the destination's low bits to zero
- *   and dropped the read.  See docs/bug-fread-alignment.md if you want
- *   the gory details.
+ *   and dropped the read.
  *
  * What this app does:
  *   1. opendir("/"), pick the first non-app file >= 512 bytes
@@ -110,7 +109,7 @@ int main(void) {
         printf("PASS — kernel handles unaligned fread correctly.\n");
     } else if (g1 == 16 && g2 == 0) {
         printf("FAIL — unaligned fread returned 0 bytes (classic alignment bug).\n");
-        printf("       See docs/bug-fread-alignment.md for the fix.\n");
+        printf("       Update the kernel fread DMA path before rerunning this test.\n");
     } else {
         printf("FAIL — unexpected mismatch (g1=%d g2=%d).\n", g1, g2);
     }
